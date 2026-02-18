@@ -22,3 +22,4 @@ A transcription service for live dispatch audio feeds
 - Start/stop controls now optimistically update the UI for immediate feedback while the request completes.
 - Active feeds now include a remove (X) control to drop a stream from the list.
 - UI corner radii have been tightened to a subtle, near-square look across controls and panels.
+- Newly added recordings now flash green briefly to highlight recent arrivals.

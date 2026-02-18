@@ -619,7 +619,8 @@ function getRecordingNode(recording) {
       progressText: fragment.querySelector(".progress-text"),
       audio: fragment.querySelector(".recording-audio"),
       text: fragment.querySelector(".recording-text"),
-      transcriptToggle: fragment.querySelector(".transcript-toggle")
+      transcriptToggle: fragment.querySelector(".transcript-toggle"),
+      newTimeout: null
     };
     node.transcriptToggle.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -638,10 +639,23 @@ function getRecordingNode(recording) {
       toggleTranscript(node);
     });
     recordingNodes.set(recording.id, node);
+    highlightNewRecording(node);
   }
 
   updateRecordingNode(node, recording);
   return node;
+}
+
+function highlightNewRecording(node) {
+  if (node.newTimeout) {
+    clearTimeout(node.newTimeout);
+  }
+
+  node.root.classList.add("recording-new");
+  node.newTimeout = setTimeout(() => {
+    node.root.classList.remove("recording-new");
+    node.newTimeout = null;
+  }, 4000);
 }
 
 function updateRecordingNode(node, rec) {

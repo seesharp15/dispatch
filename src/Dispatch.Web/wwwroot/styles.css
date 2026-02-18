@@ -504,6 +504,21 @@ button,
   gap: 6px;
 }
 
+.recording.recording-new {
+  animation: recordingFlash 3.5s ease-out;
+  border-color: rgba(59, 162, 114, 0.6);
+  box-shadow: 0 0 0 1px rgba(59, 162, 114, 0.3);
+}
+
+@keyframes recordingFlash {
+  0% {
+    background: rgba(59, 162, 114, 0.22);
+  }
+  100% {
+    background: var(--panel-2);
+  }
+}
+
 .recording-row {
   display: flex;
   align-items: center;
