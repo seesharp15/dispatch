@@ -1,4 +1,5 @@
 using Dispatch.Web.Data;
+using FeedDiscovery;
 using Dispatch.Web.Models;
 using Dispatch.Web.Options;
 using Dispatch.Web.Services;
@@ -138,6 +139,7 @@ builder.Services.Configure<StreamOptions>(builder.Configuration.GetSection("Stre
 builder.Services.Configure<BroadcastifyOptions>(builder.Configuration.GetSection("Broadcastify"));
 builder.Services.Configure<TranscriptionOptions>(builder.Configuration.GetSection("Transcription"));
 builder.Services.Configure<DecoderOptions>(builder.Configuration.GetSection("Decoder"));
+builder.Services.AddBroadcastifyFeedDiscovery(builder.Configuration);
 
 builder.Services.Configure<JsonOptions>(options =>
 {
