@@ -738,7 +738,8 @@ function getRecordingNode(recording, shouldHighlight) {
       text: fragment.querySelector(".recording-text"),
       transcriptToggle: fragment.querySelector(".transcript-toggle"),
       archiveToggle: fragment.querySelector(".archive-toggle"),
-      newTimeout: null
+      newTimeout: null,
+      hasTranscript: false
     };
     node.transcriptToggle.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -847,9 +848,6 @@ function updateRecordingNode(node, rec) {
 
   if (rec.transcriptText) {
     node.text.textContent = rec.transcriptText;
-    if (!node.text.hasAttribute("hidden")) {
-      node.transcriptToggle.textContent = "Hide";
-    }
   } else if (rec.transcriptStatus === "Processing") {
     node.text.textContent = "Transcribing...";
   } else if (rec.transcriptStatus === "Failed") {
@@ -860,12 +858,24 @@ function updateRecordingNode(node, rec) {
     node.text.textContent = "Transcript pending";
   }
 
-  if (node.text.hasAttribute("hidden")) {
+  const hasTranscript = rec.transcriptStatus === "Complete" && Boolean(rec.transcriptText);
+  node.hasTranscript = hasTranscript;
+  node.transcriptToggle.hidden = !hasTranscript;
+  if (!hasTranscript) {
+    node.text.setAttribute("hidden", "true");
     node.transcriptToggle.textContent = "Transcript";
+  } else if (node.text.hasAttribute("hidden")) {
+    node.transcriptToggle.textContent = "Transcript";
+  } else {
+    node.transcriptToggle.textContent = "Hide";
   }
 }
 
 function toggleTranscript(node) {
+  if (!node.hasTranscript) {
+    return;
+  }
+
   const isHidden = node.text.hasAttribute("hidden");
   if (isHidden) {
     node.text.removeAttribute("hidden");
