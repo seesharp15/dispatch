@@ -36,3 +36,4 @@ A transcription service for live dispatch audio feeds
 - Start buttons now render in neutral gray while Stop remains red for clearer at-a-glance status.
 - Recording list scroll position now anchors to the visible item during refreshes so updates don’t jump your view.
 - Recording-day scroll state now persists across refreshes without clearing the container, preventing jumps mid-list.
+- Recording rows no longer show a separate duration stamp; the audio control already conveys length.

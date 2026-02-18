@@ -589,12 +589,6 @@ button,
   white-space: nowrap;
 }
 
-.recording-duration {
-  margin: 0;
-  font-size: 0.75rem;
-  color: var(--muted);
-  white-space: nowrap;
-}
 
 .recording-status {
   display: inline-flex;

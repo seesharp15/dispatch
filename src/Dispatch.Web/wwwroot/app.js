@@ -819,7 +819,6 @@ function getRecordingNode(recording, shouldHighlight) {
     node = {
       root: fragment.querySelector(".recording"),
       time: fragment.querySelector(".recording-time"),
-      duration: fragment.querySelector(".recording-duration"),
       badge: fragment.querySelector(".badge"),
       progressText: fragment.querySelector(".progress-text"),
       archivedFlag: fragment.querySelector(".archived-flag"),
@@ -893,7 +892,6 @@ function updateRecordingNode(node, rec) {
   node.root.dataset.recordingId = rec.id;
   const start = new Date(rec.startUtc);
   node.time.textContent = start.toLocaleString();
-  node.duration.textContent = `${rec.durationSeconds.toFixed(1)}s`;
   const showStatus = rec.transcriptStatus !== "Complete";
   node.badge.textContent = showStatus ? rec.transcriptStatus : "";
   node.badge.hidden = !showStatus;
