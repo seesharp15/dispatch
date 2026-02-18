@@ -9,6 +9,7 @@
 
 #Project Items 
 src/Dispatch.Web/Data/recordings/
+src/Dispatch.Web/Data/dispatch.db*
 
 # Build results
 [Dd]ebug/
