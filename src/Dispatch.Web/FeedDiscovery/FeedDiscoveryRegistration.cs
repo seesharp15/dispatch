@@ -9,6 +9,7 @@ public static class FeedDiscoveryRegistration
     public static IServiceCollection AddBroadcastifyFeedDiscovery(this IServiceCollection services, IConfiguration cfg)
     {
         services.Configure<BroadcastifyOptions>(cfg.GetSection("Broadcastify"));
+        services.AddMemoryCache();
 
         services.AddHttpClient<IFeedDiscoveryService, BroadcastifyFeedDiscoveryService>(http =>
         {

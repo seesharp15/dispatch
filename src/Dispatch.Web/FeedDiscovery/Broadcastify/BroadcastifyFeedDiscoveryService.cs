@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.RegularExpressions;
 using FeedDiscovery;
 using HtmlAgilityPack;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 
 namespace FeedDiscovery.Broadcastify;
@@ -10,11 +11,13 @@ public sealed class BroadcastifyFeedDiscoveryService : IFeedDiscoveryService
 {
     private readonly HttpClient _http;
     private readonly BroadcastifyOptions _opt;
+    private readonly IMemoryCache _cache;
 
-    public BroadcastifyFeedDiscoveryService(HttpClient http, IOptions<BroadcastifyOptions> options)
+    public BroadcastifyFeedDiscoveryService(HttpClient http, IOptions<BroadcastifyOptions> options, IMemoryCache cache)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _opt = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
     }
 
     public Task<IReadOnlyList<AudioFeed>> GetFeedsAsync(
@@ -47,23 +50,36 @@ public sealed class BroadcastifyFeedDiscoveryService : IFeedDiscoveryService
             }
         }
 
-        var stateUrl = $"{_opt.BaseUrl.TrimEnd('/')}/listen/stid/{stateId}";
-        var html = await GetStringAsync(stateUrl, ct).ConfigureAwait(false);
-
-        var doc = new HtmlDocument();
-        doc.LoadHtml(html);
-
-        var feeds = new List<AudioFeed>(capacity: 512);
-        var stateDisplay = stateName.Trim();
-
-        foreach (var feedRow in ParseAreawideFeeds(doc, stateDisplay))
+        var cacheKey = $"broadcastify:feeds:{normalizedState}";
+        if (!_cache.TryGetValue(cacheKey, out List<AudioFeed>? feeds))
         {
-            feeds.Add(feedRow);
-        }
+            var stateUrl = $"{_opt.BaseUrl.TrimEnd('/')}/listen/stid/{stateId}";
+            var html = await GetStringAsync(stateUrl, ct).ConfigureAwait(false);
 
-        foreach (var feedRow in ParseAllFeedsTable(doc, stateDisplay))
-        {
-            feeds.Add(feedRow);
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+
+            var stateDisplay = stateName.Trim();
+            feeds = new List<AudioFeed>(capacity: 512);
+
+            foreach (var feedRow in ParseAreawideFeeds(doc, stateDisplay))
+            {
+                feeds.Add(feedRow);
+            }
+
+            foreach (var feedRow in ParseAllFeedsTable(doc, stateDisplay))
+            {
+                feeds.Add(feedRow);
+            }
+
+            var cacheDays = _opt.FeedCacheDays > 0 ? _opt.FeedCacheDays : 30;
+            _cache.Set(
+                cacheKey,
+                feeds,
+                new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(cacheDays)
+                });
         }
 
         if (!string.IsNullOrWhiteSpace(countyName))
