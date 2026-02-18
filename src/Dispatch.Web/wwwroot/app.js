@@ -835,6 +835,38 @@ function connectFeedStream() {
   }
 
   feedEventSource = new EventSource("/api/feeds/stream");
+  feedEventSource.addEventListener("snapshot", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (!Array.isArray(payload)) {
+        return;
+      }
+
+      payload.forEach((item) => {
+        if (!item || !item.feedId) {
+          return;
+        }
+
+        const entry = activeFeedNodes.get(item.feedId);
+        if (!entry) {
+          return;
+        }
+
+        if (typeof item.isRunning === "boolean") {
+          entry.feed.isRunning = item.isRunning;
+        }
+        if (item.isActive !== undefined && item.isActive !== null) {
+          entry.feed.isActive = item.isActive;
+        }
+
+        updateActiveFeedCard(entry);
+      });
+
+      updateActiveStatusFromNodes();
+    } catch (error) {
+      console.error(error);
+    }
+  });
   feedEventSource.addEventListener("updated", (event) => {
     try {
       const payload = JSON.parse(event.data);

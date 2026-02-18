@@ -611,7 +611,7 @@ app.MapGet("/api/ui-config", (IOptions<TranscriptionOptions> options) =>
     });
 });
 
-app.MapGet("/api/feeds/stream", async (IFeedEventHub eventHub, HttpContext context, CancellationToken ct) =>
+app.MapGet("/api/feeds/stream", async (IFeedEventHub eventHub, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
     context.Response.Headers.CacheControl = "no-cache";
     context.Response.Headers.Connection = "keep-alive";
@@ -621,6 +621,20 @@ app.MapGet("/api/feeds/stream", async (IFeedEventHub eventHub, HttpContext conte
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
+
+    var feeds = await db.Feeds.AsNoTracking()
+        .Select(f => new { f.Id, f.IsActive })
+        .ToListAsync(ct);
+    var snapshot = feeds.Select(f => new
+    {
+        feedId = f.Id,
+        isRunning = coordinator.IsRunning(f.Id),
+        isActive = f.IsActive
+    });
+    var snapshotPayload = JsonSerializer.Serialize(snapshot, jsonOptions);
+    await context.Response.WriteAsync("event: snapshot\n", ct);
+    await context.Response.WriteAsync($"data: {snapshotPayload}\n\n", ct);
+    await context.Response.Body.FlushAsync(ct);
 
     await foreach (var evt in eventHub.Subscribe(ct))
     {

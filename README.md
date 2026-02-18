@@ -44,3 +44,4 @@ A transcription service for live dispatch audio feeds
 - Removed the redundant “View activity” action since selecting a feed already shows its activity.
 - Feed cards now flash green briefly when a new recording arrives, even if the feed isn’t selected.
 - Feed status now updates live via server-sent events when recording starts or stops.
+- Feed status streaming now sends an initial snapshot so the UI reflects current running feeds without a manual refresh.
