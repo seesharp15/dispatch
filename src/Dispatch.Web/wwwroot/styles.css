@@ -102,6 +102,64 @@ body {
   min-height: 0;
 }
 
+.settings-page {
+  padding: 20px;
+}
+
+.settings-panel {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 20px;
+  padding: 20px;
+}
+
+.settings-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.settings-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.toggle-row,
+.interval-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.9rem;
+}
+
+.interval-row input,
+.toggle-row input {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 10px;
+  width: 120px;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.toggle-row input {
+  width: auto;
+  accent-color: var(--accent);
+}
+
+.muted.small {
+  font-size: 0.8rem;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -491,5 +549,9 @@ button,
   .insights {
     max-height: none;
     height: auto;
+  }
+
+  .settings-panel {
+    margin: 0;
   }
 }

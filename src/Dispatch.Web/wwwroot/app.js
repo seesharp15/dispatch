@@ -7,6 +7,12 @@ const recordingsContainer = document.getElementById("recordings");
 const recordingsTitle = document.getElementById("recordings-title");
 const recordingsSubtitle = document.getElementById("recordings-subtitle");
 const dropZone = document.getElementById("drop-zone");
+const dashboardSection = document.getElementById("dashboard");
+const settingsSection = document.getElementById("settings");
+const navLinks = document.querySelectorAll(".nav-link");
+const autoRefreshToggle = document.getElementById("auto-refresh-toggle");
+const refreshIntervalInput = document.getElementById("refresh-interval");
+const refreshIntervalValue = document.getElementById("refresh-interval-value");
 
 const treeStateTemplate = document.getElementById("tree-state-template");
 const treeCountyTemplate = document.getElementById("tree-county-template");
@@ -15,13 +21,19 @@ const activeFeedTemplate = document.getElementById("active-feed-template");
 const recordingTemplate = document.getElementById("recording-template");
 const recordingDayTemplate = document.getElementById("recording-day-template");
 
-const ACTIVE_REFRESH_MS = 8000;
-const RECORDING_REFRESH_MS = 4000;
+const DEFAULT_REFRESH_SECONDS = 8;
+const STORAGE_KEYS = {
+  autoRefresh: "dispatch.autoRefreshEnabled",
+  refreshSeconds: "dispatch.refreshIntervalSeconds"
+};
 
 const stateStore = new Map();
 const activeFeedNodes = new Map();
 const recordingNodes = new Map();
 let selectedFeedId = null;
+let refreshTimer = null;
+let refreshEnabled = true;
+let refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
@@ -240,6 +252,62 @@ async function loadActiveFeeds() {
     : "No feeds added";
 
   renderActiveFeeds(feeds);
+}
+
+function showPage(page) {
+  const isDashboard = page === "dashboard";
+  dashboardSection.hidden = !isDashboard;
+  settingsSection.hidden = isDashboard;
+
+  navLinks.forEach((link) => {
+    link.classList.toggle("active", link.dataset.page === page);
+  });
+}
+
+function loadRefreshSettings() {
+  const storedEnabled = localStorage.getItem(STORAGE_KEYS.autoRefresh);
+  const storedInterval = localStorage.getItem(STORAGE_KEYS.refreshSeconds);
+
+  refreshEnabled = storedEnabled !== null ? storedEnabled === "true" : true;
+  refreshIntervalSeconds = storedInterval ? Number(storedInterval) : DEFAULT_REFRESH_SECONDS;
+
+  if (!Number.isFinite(refreshIntervalSeconds) || refreshIntervalSeconds < 2) {
+    refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
+  }
+
+  autoRefreshToggle.checked = refreshEnabled;
+  refreshIntervalInput.value = String(refreshIntervalSeconds);
+  refreshIntervalValue.textContent = `Every ${refreshIntervalSeconds} seconds`;
+}
+
+function applyRefreshSettings() {
+  refreshEnabled = autoRefreshToggle.checked;
+  refreshIntervalSeconds = Number(refreshIntervalInput.value);
+  if (!Number.isFinite(refreshIntervalSeconds) || refreshIntervalSeconds < 2) {
+    refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
+    refreshIntervalInput.value = String(refreshIntervalSeconds);
+  }
+
+  localStorage.setItem(STORAGE_KEYS.autoRefresh, String(refreshEnabled));
+  localStorage.setItem(STORAGE_KEYS.refreshSeconds, String(refreshIntervalSeconds));
+  refreshIntervalValue.textContent = `Every ${refreshIntervalSeconds} seconds`;
+  restartAutoRefresh();
+}
+
+function restartAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+
+  if (!refreshEnabled) {
+    return;
+  }
+
+  refreshTimer = setInterval(() => {
+    loadActiveFeeds().catch((err) => console.error(err));
+    loadRecordings().catch((err) => console.error(err));
+  }, refreshIntervalSeconds * 1000);
 }
 
 function renderActiveFeeds(feeds) {
@@ -534,9 +602,16 @@ function setupDragAndDrop() {
 
 refreshStatesButton.addEventListener("click", () => loadStates().catch((err) => console.error(err)));
 searchInput.addEventListener("input", applySearchFilter);
+navLinks.forEach((link) => {
+  link.addEventListener("click", () => showPage(link.dataset.page));
+});
+autoRefreshToggle.addEventListener("change", applyRefreshSettings);
+refreshIntervalInput.addEventListener("change", applyRefreshSettings);
+refreshIntervalInput.addEventListener("blur", applyRefreshSettings);
 
 setupDragAndDrop();
 loadStates().catch((err) => console.error(err));
 loadActiveFeeds().catch((err) => console.error(err));
-setInterval(loadActiveFeeds, ACTIVE_REFRESH_MS);
-setInterval(loadRecordings, RECORDING_REFRESH_MS);
+loadRefreshSettings();
+restartAutoRefresh();
+showPage("dashboard");
