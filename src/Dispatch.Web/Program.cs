@@ -9,6 +9,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Http.Json;
 using System.Text.Json.Serialization;
 using System.Data;
+using System.Globalization;
 using DiscoveryBroadcastifyOptions = FeedDiscovery.Broadcastify.BroadcastifyOptions;
 
 string ResolveRecordingPath(string path, IHostEnvironment env)
@@ -108,7 +109,7 @@ long? GetRecordingFileSize(Recording recording, IWebHostEnvironment env)
 async Task<Dictionary<Guid, int>> GetPendingQueuePositionsAsync(DispatchDbContext db, CancellationToken cancellationToken)
 {
     var pendingIds = await db.Recordings.AsNoTracking()
-        .Where(r => r.TranscriptStatus == TranscriptStatus.Pending)
+        .Where(r => r.TranscriptStatus == TranscriptStatus.Pending && !r.IsArchived)
         .OrderBy(r => r.CreatedUtc)
         .Select(r => r.Id)
         .ToListAsync(cancellationToken);
@@ -224,6 +225,16 @@ using (var scope = app.Services.CreateScope())
     if (!existingColumns.Contains("TranscriptStartedUtc"))
     {
         db.Database.ExecuteSqlRaw("ALTER TABLE Recordings ADD COLUMN TranscriptStartedUtc TEXT NULL;");
+    }
+
+    if (!existingColumns.Contains("IsArchived"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE Recordings ADD COLUMN IsArchived INTEGER NOT NULL DEFAULT 0;");
+    }
+
+    if (!existingColumns.Contains("ArchivedUtc"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE Recordings ADD COLUMN ArchivedUtc TEXT NULL;");
     }
 }
 
@@ -344,12 +355,18 @@ app.MapPost("/api/feeds/{id:guid}/stop", async (Guid id, DispatchDbContext db, F
     return Results.Ok();
 });
 
-app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, CancellationToken ct) =>
+app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchived, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, CancellationToken ct) =>
 {
-    var recordings = await db.Recordings.AsNoTracking()
-        .Where(r => r.FeedId == id)
+    var query = db.Recordings.AsNoTracking()
+        .Where(r => r.FeedId == id);
+
+    if (!includeArchived)
+    {
+        query = query.Where(r => !r.IsArchived);
+    }
+
+    var recordings = await query
         .OrderByDescending(r => r.StartUtc)
-        .Take(250)
         .ToListAsync(ct);
 
     var queuePositions = await GetPendingQueuePositionsAsync(db, ct);
@@ -366,7 +383,9 @@ app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, DispatchDbContext 
         queuePositions.TryGetValue(r.Id, out var position) ? position : null,
         r.TranscriptText,
         r.TranscriptPath,
-        r.TranscriptProvider));
+        r.TranscriptProvider,
+        r.IsArchived,
+        r.ArchivedUtc.HasValue ? AsUtc(r.ArchivedUtc.Value) : null));
 
     return Results.Ok(response);
 });
@@ -411,7 +430,9 @@ app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IO
         queuePositions.TryGetValue(recording.Id, out var position) ? position : null,
         recording.TranscriptText,
         recording.TranscriptPath,
-        recording.TranscriptProvider));
+        recording.TranscriptProvider,
+        recording.IsArchived,
+        recording.ArchivedUtc.HasValue ? AsUtc(recording.ArchivedUtc.Value) : null));
 });
 
 app.MapPost("/api/recordings/{id:guid}/reprocess", async (Guid id, DispatchDbContext db, CancellationToken ct) =>
@@ -457,6 +478,57 @@ app.MapPost("/api/recordings/{id:guid}/reprocess", async (Guid id, DispatchDbCon
 
     await db.SaveChangesAsync(ct);
     return Results.Ok();
+});
+
+app.MapPost("/api/recordings/{id:guid}/archive", async (Guid id, DispatchDbContext db, CancellationToken ct) =>
+{
+    var recording = await db.Recordings.FirstOrDefaultAsync(r => r.Id == id, ct);
+    if (recording == null)
+    {
+        return Results.NotFound();
+    }
+
+    if (!recording.IsArchived)
+    {
+        recording.IsArchived = true;
+        recording.ArchivedUtc = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    return Results.Ok();
+});
+
+app.MapPost("/api/feeds/{id:guid}/recordings/archive", async (Guid id, string day, DispatchDbContext db, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(day) ||
+        !DateOnly.TryParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dayDate))
+    {
+        return Results.BadRequest(new { message = "Day must be in yyyy-MM-dd format." });
+    }
+
+    var localStart = dayDate.ToDateTime(TimeOnly.MinValue);
+    var localEnd = localStart.AddDays(1);
+    var utcStart = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localStart, DateTimeKind.Local));
+    var utcEnd = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localEnd, DateTimeKind.Local));
+
+    var recordings = await db.Recordings
+        .Where(r => r.FeedId == id && !r.IsArchived && r.StartUtc >= utcStart && r.StartUtc < utcEnd)
+        .ToListAsync(ct);
+
+    if (recordings.Count == 0)
+    {
+        return Results.Ok(new { archived = 0 });
+    }
+
+    var now = DateTime.UtcNow;
+    foreach (var recording in recordings)
+    {
+        recording.IsArchived = true;
+        recording.ArchivedUtc = now;
+    }
+
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { archived = recordings.Count });
 });
 
 app.MapGet("/api/stream", async (string url, BroadcastifyResolver resolver, IHttpClientFactory httpClientFactory, HttpContext context, CancellationToken ct) =>

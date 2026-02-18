@@ -6,6 +6,7 @@ const activeStatus = document.getElementById("active-status");
 const recordingsContainer = document.getElementById("recordings");
 const recordingsTitle = document.getElementById("recordings-title");
 const recordingsSubtitle = document.getElementById("recordings-subtitle");
+const showArchivedToggle = document.getElementById("show-archived-toggle");
 const dropZone = document.getElementById("drop-zone");
 const dashboardSection = document.getElementById("dashboard");
 const settingsSection = document.getElementById("settings");
@@ -24,7 +25,8 @@ const recordingDayTemplate = document.getElementById("recording-day-template");
 const DEFAULT_REFRESH_SECONDS = 8;
 const STORAGE_KEYS = {
   autoRefresh: "dispatch.autoRefreshEnabled",
-  refreshSeconds: "dispatch.refreshIntervalSeconds"
+  refreshSeconds: "dispatch.refreshIntervalSeconds",
+  showArchived: "dispatch.showArchived"
 };
 
 const stateStore = new Map();
@@ -34,6 +36,7 @@ let selectedFeedId = null;
 let refreshTimer = null;
 let refreshEnabled = true;
 let refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
+let showArchived = false;
 let contextMenu = null;
 let contextRecordingId = null;
 
@@ -356,6 +359,18 @@ function loadRefreshSettings() {
   refreshIntervalValue.textContent = `Every ${refreshIntervalSeconds} seconds`;
 }
 
+function loadArchiveSettings() {
+  const storedArchived = localStorage.getItem(STORAGE_KEYS.showArchived);
+  showArchived = storedArchived === "true";
+  showArchivedToggle.checked = showArchived;
+}
+
+function applyArchiveSettings() {
+  showArchived = showArchivedToggle.checked;
+  localStorage.setItem(STORAGE_KEYS.showArchived, String(showArchived));
+  loadRecordings().catch((err) => console.error(err));
+}
+
 function applyRefreshSettings() {
   refreshEnabled = autoRefreshToggle.checked;
   refreshIntervalSeconds = Number(refreshIntervalInput.value);
@@ -553,7 +568,9 @@ async function loadRecordings() {
     return;
   }
 
-  const recordings = await fetchJson(`/api/feeds/${selectedFeedId}/recordings`);
+  const recordings = await fetchJson(
+    `/api/feeds/${selectedFeedId}/recordings?includeArchived=${showArchived}`
+  );
   renderRecordings(recordings);
 }
 
@@ -581,7 +598,8 @@ function renderRecordings(recordings) {
     const recordingsForDay = groups.get(key) || [];
     const dayFragment = recordingDayTemplate.content.cloneNode(true);
     const dayRoot = dayFragment.querySelector(".recording-day");
-    const dayHeader = dayFragment.querySelector(".day-header");
+    const dayToggle = dayFragment.querySelector(".day-toggle");
+    const dayArchive = dayFragment.querySelector(".day-archive");
     const dayLabel = dayFragment.querySelector(".day-label");
     const dayCount = dayFragment.querySelector(".day-count");
     const dayList = dayFragment.querySelector(".day-list");
@@ -593,9 +611,14 @@ function renderRecordings(recordings) {
     let expanded = key === todayKey;
     dayList.hidden = !expanded;
 
-    dayHeader.addEventListener("click", () => {
+    dayToggle.addEventListener("click", () => {
       expanded = !expanded;
       dayList.hidden = !expanded;
+    });
+
+    dayArchive.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await archiveDay(key);
     });
 
     recordingsForDay.forEach((recording) => {
@@ -605,6 +628,22 @@ function renderRecordings(recordings) {
 
     recordingsContainer.appendChild(dayRoot);
   });
+}
+
+async function archiveDay(dayKey) {
+  if (!selectedFeedId) {
+    return;
+  }
+
+  try {
+    await fetchJson(
+      `/api/feeds/${selectedFeedId}/recordings/archive?day=${encodeURIComponent(dayKey)}`,
+      { method: "POST" }
+    );
+    await loadRecordings();
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 function getRecordingNode(recording) {
@@ -617,14 +656,22 @@ function getRecordingNode(recording) {
       duration: fragment.querySelector(".recording-duration"),
       badge: fragment.querySelector(".badge"),
       progressText: fragment.querySelector(".progress-text"),
+      archivedFlag: fragment.querySelector(".archived-flag"),
       audio: fragment.querySelector(".recording-audio"),
       text: fragment.querySelector(".recording-text"),
       transcriptToggle: fragment.querySelector(".transcript-toggle"),
+      archiveToggle: fragment.querySelector(".archive-toggle"),
       newTimeout: null
     };
     node.transcriptToggle.addEventListener("click", (event) => {
       event.stopPropagation();
       toggleTranscript(node);
+    });
+    node.archiveToggle.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (node.recordingId) {
+        await archiveRecording(node.recordingId);
+      }
     });
     node.root.addEventListener("contextmenu", (event) => {
       event.preventDefault();
@@ -633,7 +680,7 @@ function getRecordingNode(recording) {
       }
     });
     node.root.addEventListener("dblclick", (event) => {
-      if (event.target.closest(".transcript-toggle")) {
+      if (event.target.closest(".transcript-toggle") || event.target.closest(".archive-toggle")) {
         return;
       }
       toggleTranscript(node);
@@ -664,6 +711,10 @@ function updateRecordingNode(node, rec) {
   node.time.textContent = start.toLocaleString();
   node.duration.textContent = `${rec.durationSeconds.toFixed(1)}s`;
   node.badge.textContent = rec.transcriptStatus;
+  node.root.classList.toggle("archived", rec.isArchived);
+  node.archivedFlag.hidden = !rec.isArchived;
+  node.archiveToggle.disabled = rec.isArchived;
+  node.archiveToggle.textContent = rec.isArchived ? "Archived" : "Archive";
 
   const percent = Math.round(rec.transcriptProgress || 0);
   if (rec.transcriptStatus === "Processing") {
@@ -716,8 +767,20 @@ function toggleTranscript(node) {
   }
 }
 
+async function archiveRecording(recordingId) {
+  try {
+    await fetchJson(`/api/recordings/${recordingId}/archive`, { method: "POST" });
+    await loadRecordings();
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 function toDateKey(date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function formatDateLabel(key) {
@@ -783,11 +846,13 @@ navLinks.forEach((link) => {
 autoRefreshToggle.addEventListener("change", applyRefreshSettings);
 refreshIntervalInput.addEventListener("change", applyRefreshSettings);
 refreshIntervalInput.addEventListener("blur", applyRefreshSettings);
+showArchivedToggle.addEventListener("change", applyArchiveSettings);
 
 setupContextMenu();
 setupDragAndDrop();
 loadStates().catch((err) => console.error(err));
 loadActiveFeeds().catch((err) => console.error(err));
 loadRefreshSettings();
+loadArchiveSettings();
 restartAutoRefresh();
 showPage("dashboard");

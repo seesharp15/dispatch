@@ -73,6 +73,12 @@
               <h2 id="recordings-title">Select a feed</h2>
               <p class="muted" id="recordings-subtitle">Choose an active feed to view recordings.</p>
             </div>
+            <div class="recordings-actions">
+              <label class="checkbox-row">
+                <input id="show-archived-toggle" type="checkbox" />
+                <span>Show archived</span>
+              </label>
+            </div>
           </div>
 
           <div id="recordings" class="recordings"></div>
@@ -161,11 +167,15 @@
           <div class="recording-status">
             <span class="badge"></span>
             <span class="progress-text"></span>
+            <span class="archived-flag" hidden>Archived</span>
           </div>
           <div class="recording-audio-row">
             <audio controls class="recording-audio"></audio>
           </div>
-          <button class="ghost transcript-toggle" type="button">Transcript</button>
+          <div class="recording-actions">
+            <button class="ghost transcript-toggle" type="button">Transcript</button>
+            <button class="ghost archive-toggle" type="button">Archive</button>
+          </div>
         </div>
         <pre class="recording-text" hidden></pre>
       </div>
@@ -173,10 +183,13 @@
 
     <template id="recording-day-template">
       <section class="recording-day">
-        <button class="day-header" type="button">
-          <span class="day-label"></span>
-          <span class="day-count"></span>
-        </button>
+        <div class="day-header">
+          <button class="day-toggle" type="button">
+            <span class="day-label"></span>
+            <span class="day-count"></span>
+          </button>
+          <button class="ghost day-archive" type="button">Archive</button>
+        </div>
         <div class="day-list"></div>
       </section>
     </template>

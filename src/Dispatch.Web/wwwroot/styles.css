@@ -173,6 +173,18 @@ body {
   accent-color: var(--accent);
 }
 
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.checkbox-row input {
+  accent-color: var(--accent);
+}
+
 .muted.small {
   font-size: 0.8rem;
 }
@@ -205,6 +217,12 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.recordings-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .eyebrow {
@@ -460,23 +478,38 @@ button,
 .recording-day {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  overflow: auto;
-    min-height: 35px;
+  overflow: hidden;
+  min-height: 0;
   background: rgba(255, 255, 255, 0.02);
 }
 
 .day-header {
-  width: 100%;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
   background: rgba(255, 255, 255, 0.04);
+  padding: 8px 10px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.day-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  background: transparent;
   border: none;
-  padding: 10px 12px;
+  padding: 0;
   color: var(--text);
   font-family: inherit;
-
   cursor: pointer;
+}
+
+.day-archive {
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  white-space: nowrap;
 }
 
 .day-label {
@@ -502,6 +535,10 @@ button,
   padding: 10px;
   display: grid;
   gap: 6px;
+}
+
+.recording.archived {
+  opacity: 0.6;
 }
 
 .recording.recording-new {
@@ -554,13 +591,19 @@ button,
   flex-shrink: 0;
 }
 
-.recording-row .transcript-toggle {
+.recording-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.recording-actions button {
   padding: 4px 8px;
   font-size: 0.7rem;
   border-radius: var(--radius-pill);
   white-space: nowrap;
-  margin-left: auto;
-  flex-shrink: 0;
 }
 
 .badge {
@@ -580,6 +623,20 @@ button,
 
 .progress-text:empty {
   display: none;
+}
+
+.archived-flag {
+  padding: 4px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.7rem;
+}
+
+.archive-toggle:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .recording-audio-row {

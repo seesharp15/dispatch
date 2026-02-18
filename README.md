@@ -24,3 +24,4 @@ A transcription service for live dispatch audio feeds
 - UI corner radii have been tightened to a subtle, near-square look across controls and panels.
 - Newly added recordings now flash green briefly to highlight recent arrivals.
 - API timestamps are now marked as UTC so the UI renders them in local time.
+- Recording lists now support archiving per recording or per day, with a show-archived toggle in the feed activity pane.

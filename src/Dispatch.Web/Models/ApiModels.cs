@@ -28,7 +28,9 @@ public record RecordingDto(
     int? TranscriptQueuePosition,
     string? TranscriptText,
     string? TranscriptPath,
-    string? TranscriptProvider);
+    string? TranscriptProvider,
+    bool IsArchived,
+    DateTime? ArchivedUtc);
 
 public record DiscoveryFeedDto(
     string State,

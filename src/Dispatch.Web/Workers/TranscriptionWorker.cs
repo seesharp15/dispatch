@@ -57,7 +57,7 @@ public class TranscriptionWorker : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DispatchDbContext>();
         var recording = await db.Recordings
-            .Where(r => r.TranscriptStatus == TranscriptStatus.Pending)
+            .Where(r => r.TranscriptStatus == TranscriptStatus.Pending && !r.IsArchived)
             .OrderBy(r => r.CreatedUtc)
             .FirstOrDefaultAsync(cancellationToken);
 
