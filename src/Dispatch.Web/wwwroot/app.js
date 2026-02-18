@@ -778,7 +778,9 @@ function connectRecordingStream() {
   const handleEvent = (type) => async (event) => {
     try {
       const payload = JSON.parse(event.data);
-      if (!payload || payload.feedId !== selectedFeedId) {
+      const payloadFeedId = payload?.feedId ? String(payload.feedId).toLowerCase() : "";
+      const selectedId = selectedFeedId ? String(selectedFeedId).toLowerCase() : "";
+      if (!payload || payloadFeedId !== selectedId) {
         if (payload && type === "created") {
           flashFeedCard(payload.feedId);
         }
@@ -818,6 +820,17 @@ function connectRecordingStream() {
   eventSource.addEventListener("created", handleEvent("created"));
   eventSource.addEventListener("updated", handleEvent("updated"));
   eventSource.addEventListener("archived", handleEvent("archived"));
+  eventSource.onerror = () => {
+    if (!refreshEnabled || !selectedFeedId) {
+      return;
+    }
+    disconnectRecordingStream();
+    setTimeout(() => {
+      if (refreshEnabled && selectedFeedId) {
+        connectRecordingStream();
+      }
+    }, 1000);
+  };
 }
 
 function disconnectRecordingStream() {

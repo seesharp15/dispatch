@@ -45,3 +45,4 @@ A transcription service for live dispatch audio feeds
 - Feed cards now flash green briefly when a new recording arrives, even if the feed isn’t selected.
 - Feed status now updates live via server-sent events when recording starts or stops.
 - Feed status streaming now sends an initial snapshot so the UI reflects current running feeds without a manual refresh.
+- Recording stream matching now normalizes feed IDs and reconnects on errors to keep new items flowing without manual refresh.
