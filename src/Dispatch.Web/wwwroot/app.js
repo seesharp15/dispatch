@@ -559,20 +559,19 @@ function getRecordingNode(recording) {
     };
     node.transcriptToggle.addEventListener("click", (event) => {
       event.stopPropagation();
-      const isHidden = node.text.hasAttribute("hidden");
-      if (isHidden) {
-        node.text.removeAttribute("hidden");
-        node.transcriptToggle.textContent = "Hide";
-      } else {
-        node.text.setAttribute("hidden", "true");
-        node.transcriptToggle.textContent = "Transcript";
-      }
+      toggleTranscript(node);
     });
     node.root.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       if (node.recordingId) {
         showContextMenu(event.clientX, event.clientY, node.recordingId);
       }
+    });
+    node.root.addEventListener("dblclick", (event) => {
+      if (event.target.closest(".transcript-toggle")) {
+        return;
+      }
+      toggleTranscript(node);
     });
     recordingNodes.set(recording.id, node);
   }
@@ -624,6 +623,17 @@ function updateRecordingNode(node, rec) {
   }
 
   if (node.text.hasAttribute("hidden")) {
+    node.transcriptToggle.textContent = "Transcript";
+  }
+}
+
+function toggleTranscript(node) {
+  const isHidden = node.text.hasAttribute("hidden");
+  if (isHidden) {
+    node.text.removeAttribute("hidden");
+    node.transcriptToggle.textContent = "Hide";
+  } else {
+    node.text.setAttribute("hidden", "true");
     node.transcriptToggle.textContent = "Transcript";
   }
 }

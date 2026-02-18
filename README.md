@@ -17,3 +17,4 @@ A transcription service for live dispatch audio feeds
 - Recording entries are more compact and transcripts can be expanded or collapsed per item.
 - Recording rows are now single-line with inline audio, right-aligned transcript toggle, and no 100% indicator for completed items.
 - Right-clicking a recording now provides a reprocess transcript action, with the transcript button aligned to the right in the row.
+- Double-clicking a recording toggles the transcript open/closed, matching the transcript button behavior.
