@@ -13,3 +13,4 @@ A transcription service for live dispatch audio feeds
 - Settings page now allows toggling auto-refresh and adjusting the refresh interval.
 - Settings navigation now properly swaps the dashboard and settings view (no stacking).
 - Scrollable list containers now cap at viewport height with overflow scrolling.
+- Collapsed recording day groups now shrink to header height instead of filling available space.
