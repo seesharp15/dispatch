@@ -23,6 +23,7 @@ const recordingTemplate = document.getElementById("recording-template");
 const recordingDayTemplate = document.getElementById("recording-day-template");
 
 const DEFAULT_REFRESH_SECONDS = 8;
+const NEW_RECORDING_WINDOW_SECONDS = 10;
 const STORAGE_KEYS = {
   autoRefresh: "dispatch.autoRefreshEnabled",
   refreshSeconds: "dispatch.refreshIntervalSeconds",
@@ -657,7 +658,9 @@ function renderRecordings(recordings) {
     const desiredSet = new Set(desiredIds);
 
     recordingsForDay.forEach((recording) => {
-      const node = getRecordingNode(recording);
+      const isNew = !recordingNodes.has(recording.id);
+      const shouldHighlight = isNew && shouldHighlightRecording(recording);
+      const node = getRecordingNode(recording, shouldHighlight);
       dayEntry.list.appendChild(node.root);
     });
 
@@ -718,7 +721,7 @@ async function archiveDay(dayKey) {
   }
 }
 
-function getRecordingNode(recording) {
+function getRecordingNode(recording, shouldHighlight) {
   let node = recordingNodes.get(recording.id);
   if (!node) {
     const fragment = recordingTemplate.content.cloneNode(true);
@@ -758,11 +761,27 @@ function getRecordingNode(recording) {
       toggleTranscript(node);
     });
     recordingNodes.set(recording.id, node);
-    highlightNewRecording(node);
+    if (shouldHighlight) {
+      highlightNewRecording(node);
+    }
   }
 
   updateRecordingNode(node, recording);
   return node;
+}
+
+function shouldHighlightRecording(recording) {
+  if (!recordingsInitialized) {
+    return false;
+  }
+
+  const startTime = new Date(recording.startUtc).getTime();
+  if (Number.isNaN(startTime)) {
+    return false;
+  }
+
+  const ageSeconds = (Date.now() - startTime) / 1000;
+  return ageSeconds >= 0 && ageSeconds <= NEW_RECORDING_WINDOW_SECONDS;
 }
 
 function highlightNewRecording(node) {

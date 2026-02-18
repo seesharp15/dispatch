@@ -26,3 +26,4 @@ A transcription service for live dispatch audio feeds
 - API timestamps are now marked as UTC so the UI renders them in local time.
 - Recording lists now support archiving per recording or per day, with a show-archived toggle in the feed activity pane.
 - Recording day expansion state and scroll position are now preserved during live updates so new items append without collapsing your view.
+- New-recording flash highlights only trigger for truly new arrivals within a short time window, avoiding full-list flashes on load.
