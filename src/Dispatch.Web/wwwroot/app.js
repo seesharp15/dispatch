@@ -526,10 +526,9 @@ function createActiveFeedCard(feed) {
   const meta = fragment.querySelector(".active-meta");
   const badge = fragment.querySelector(".badge");
   const toggle = fragment.querySelector(".toggle");
-  const select = fragment.querySelector(".select");
   const remove = fragment.querySelector(".remove");
 
-  const entry = { feed, card, title, meta, badge, toggle, select, remove };
+  const entry = { feed, card, title, meta, badge, toggle, remove };
 
   toggle.addEventListener("click", async (event) => {
     event.stopPropagation();
@@ -554,11 +553,6 @@ function createActiveFeedCard(feed) {
     } finally {
       toggle.disabled = false;
     }
-  });
-
-  select.addEventListener("click", (event) => {
-    event.stopPropagation();
-    selectFeed(feed.id);
   });
 
   remove.addEventListener("click", async (event) => {
