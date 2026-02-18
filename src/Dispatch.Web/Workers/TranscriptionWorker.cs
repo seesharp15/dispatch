@@ -13,16 +13,19 @@ public class TranscriptionWorker : BackgroundService
     private readonly ITranscriber _transcriber;
     private readonly TranscriptionOptions _options;
     private readonly ILogger<TranscriptionWorker> _logger;
+    private readonly IRecordingEventHub _eventHub;
 
     public TranscriptionWorker(
         IServiceScopeFactory scopeFactory,
         ITranscriber transcriber,
         IOptions<TranscriptionOptions> options,
+        IRecordingEventHub eventHub,
         ILogger<TranscriptionWorker> logger)
     {
         _scopeFactory = scopeFactory;
         _transcriber = transcriber;
         _options = options.Value;
+        _eventHub = eventHub;
         _logger = logger;
     }
 
@@ -69,6 +72,7 @@ public class TranscriptionWorker : BackgroundService
         recording.TranscriptStatus = TranscriptStatus.Processing;
         recording.TranscriptStartedUtc = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
+        await _eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Updated));
 
         try
         {
@@ -79,6 +83,7 @@ public class TranscriptionWorker : BackgroundService
                 recording.TranscriptStartedUtc ??= DateTime.UtcNow;
                 recording.TranscribedUtc = DateTime.UtcNow;
                 await db.SaveChangesAsync(cancellationToken);
+                await _eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Updated));
                 return;
             }
 
@@ -104,6 +109,7 @@ public class TranscriptionWorker : BackgroundService
             recording.TranscribedUtc = DateTime.UtcNow;
             recording.Error = null;
             await db.SaveChangesAsync(cancellationToken);
+            await _eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Updated));
         }
         catch (Exception ex)
         {
@@ -112,6 +118,7 @@ public class TranscriptionWorker : BackgroundService
             recording.TranscriptStartedUtc ??= DateTime.UtcNow;
             recording.TranscribedUtc = DateTime.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
+            await _eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Updated));
             _logger.LogWarning(ex, "Failed to transcribe recording {RecordingId}.", recording.Id);
         }
     }

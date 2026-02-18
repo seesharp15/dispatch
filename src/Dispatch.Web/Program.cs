@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Http.Json;
 using System.Text.Json.Serialization;
 using System.Data;
 using System.Globalization;
+using System.Text.Json;
 using DiscoveryBroadcastifyOptions = FeedDiscovery.Broadcastify.BroadcastifyOptions;
 
 string ResolveRecordingPath(string path, IHostEnvironment env)
@@ -179,6 +180,7 @@ builder.Services.AddHttpClient("stream")
     });
 
 builder.Services.AddSingleton<BroadcastifyResolver>();
+builder.Services.AddSingleton<IRecordingEventHub, RecordingEventHub>();
 builder.Services.AddSingleton<FeedRecorder>();
 builder.Services.AddSingleton<FeedCoordinator>();
 
@@ -388,6 +390,7 @@ app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchiv
         ComputeTranscriptProgress(r, options.Value, GetRecordingFileSize(r, env)),
         queueInfo.Map.TryGetValue(r.Id, out var position) ? position : null,
         queueInfo.Total > 0 ? queueInfo.Total : null,
+        r.TranscriptStartedUtc.HasValue ? AsUtc(r.TranscriptStartedUtc.Value) : null,
         r.TranscriptText,
         r.TranscriptPath,
         r.TranscriptProvider,
@@ -436,6 +439,7 @@ app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IO
         ComputeTranscriptProgress(recording, options.Value, GetRecordingFileSize(recording, env)),
         queueInfo.Map.TryGetValue(recording.Id, out var position) ? position : null,
         queueInfo.Total > 0 ? queueInfo.Total : null,
+        recording.TranscriptStartedUtc.HasValue ? AsUtc(recording.TranscriptStartedUtc.Value) : null,
         recording.TranscriptText,
         recording.TranscriptPath,
         recording.TranscriptProvider,
@@ -468,6 +472,7 @@ app.MapPost("/api/recordings/batch", async (BatchRecordingsRequest request, Disp
         ComputeTranscriptProgress(r, options.Value, GetRecordingFileSize(r, env)),
         queueInfo.Map.TryGetValue(r.Id, out var position) ? position : null,
         queueInfo.Total > 0 ? queueInfo.Total : null,
+        r.TranscriptStartedUtc.HasValue ? AsUtc(r.TranscriptStartedUtc.Value) : null,
         r.TranscriptText,
         r.TranscriptPath,
         r.TranscriptProvider,
@@ -522,7 +527,7 @@ app.MapPost("/api/recordings/{id:guid}/reprocess", async (Guid id, DispatchDbCon
     return Results.Ok();
 });
 
-app.MapPost("/api/recordings/{id:guid}/archive", async (Guid id, DispatchDbContext db, CancellationToken ct) =>
+app.MapPost("/api/recordings/{id:guid}/archive", async (Guid id, DispatchDbContext db, IRecordingEventHub eventHub, CancellationToken ct) =>
 {
     var recording = await db.Recordings.FirstOrDefaultAsync(r => r.Id == id, ct);
     if (recording == null)
@@ -535,12 +540,13 @@ app.MapPost("/api/recordings/{id:guid}/archive", async (Guid id, DispatchDbConte
         recording.IsArchived = true;
         recording.ArchivedUtc = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
+        await eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Archived));
     }
 
     return Results.Ok();
 });
 
-app.MapPost("/api/feeds/{id:guid}/recordings/archive", async (Guid id, string day, DispatchDbContext db, CancellationToken ct) =>
+app.MapPost("/api/feeds/{id:guid}/recordings/archive", async (Guid id, string day, DispatchDbContext db, IRecordingEventHub eventHub, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(day) ||
         !DateOnly.TryParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dayDate))
@@ -570,6 +576,10 @@ app.MapPost("/api/feeds/{id:guid}/recordings/archive", async (Guid id, string da
     }
 
     await db.SaveChangesAsync(ct);
+    foreach (var recording in recordings)
+    {
+        await eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Archived));
+    }
     return Results.Ok(new { archived = recordings.Count });
 });
 
@@ -588,6 +598,42 @@ app.MapGet("/api/stream", async (string url, BroadcastifyResolver resolver, IHtt
     await using var responseStream = await response.Content.ReadAsStreamAsync(ct);
     await responseStream.CopyToAsync(context.Response.Body, ct);
     return Results.Empty;
+});
+
+app.MapGet("/api/ui-config", (IOptions<TranscriptionOptions> options) =>
+{
+    var opt = options.Value;
+    return Results.Ok(new
+    {
+        expectedRealtimeFactor = opt.ExpectedRealtimeFactor,
+        estimatedBytesPerSecond = opt.EstimatedBytesPerSecond
+    });
+});
+
+app.MapGet("/api/recordings/stream", async (Guid feedId, IRecordingEventHub eventHub, HttpContext context, CancellationToken ct) =>
+{
+    context.Response.Headers.CacheControl = "no-cache";
+    context.Response.Headers.Connection = "keep-alive";
+    context.Response.ContentType = "text/event-stream";
+
+    var jsonOptions = new JsonSerializerOptions
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    await foreach (var evt in eventHub.Subscribe(ct))
+    {
+        if (evt.FeedId != feedId)
+        {
+            continue;
+        }
+
+        var payload = JsonSerializer.Serialize(evt, jsonOptions);
+        var eventName = evt.Type.ToString().ToLowerInvariant();
+        await context.Response.WriteAsync($"event: {eventName}\n", ct);
+        await context.Response.WriteAsync($"data: {payload}\n\n", ct);
+        await context.Response.Body.FlushAsync(ct);
+    }
 });
 
 app.MapFallbackToFile("index.html");

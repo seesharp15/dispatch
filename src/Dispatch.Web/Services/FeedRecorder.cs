@@ -17,6 +17,7 @@ public class FeedRecorder
     private readonly StreamOptions _streamOptions;
     private readonly DecoderOptions _decoderOptions;
     private readonly IHostEnvironment _hostEnvironment;
+    private readonly IRecordingEventHub _eventHub;
 
     public FeedRecorder(
         IServiceScopeFactory scopeFactory,
@@ -25,6 +26,7 @@ public class FeedRecorder
         IOptions<StreamOptions> streamOptions,
         IOptions<DecoderOptions> decoderOptions,
         IHostEnvironment hostEnvironment,
+        IRecordingEventHub eventHub,
         ILogger<FeedRecorder> logger)
     {
         _scopeFactory = scopeFactory;
@@ -34,6 +36,7 @@ public class FeedRecorder
         _streamOptions = streamOptions.Value;
         _decoderOptions = decoderOptions.Value;
         _hostEnvironment = hostEnvironment;
+        _eventHub = eventHub;
     }
 
     public async Task RunAsync(Feed feed, CancellationToken cancellationToken)
@@ -233,9 +236,10 @@ public class FeedRecorder
             return;
         }
 
+        var recordingId = Guid.NewGuid();
         db.Recordings.Add(new Recording
         {
-            Id = Guid.NewGuid(),
+            Id = recordingId,
             FeedId = feed.Id,
             StartUtc = startUtc,
             EndUtc = endUtc,
@@ -245,6 +249,7 @@ public class FeedRecorder
         });
 
         await db.SaveChangesAsync(cancellationToken);
+        await _eventHub.PublishAsync(new RecordingEvent(recordingId, feed.Id, RecordingEventType.Created));
         _logger.LogInformation("Saved recording {FilePath} ({Duration}s) for feed {FeedId}.", filePath, durationSeconds, feed.FeedIdentifier);
     }
 }

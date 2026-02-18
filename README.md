@@ -39,3 +39,4 @@ A transcription service for live dispatch audio feeds
 - Recording rows no longer show a separate duration stamp; the audio control already conveys length.
 - Per-day recording lists now maintain their own scroll anchors during refreshes (since those lists handle scrolling, not the parent pane).
 - Recording updates now append new items and update statuses in place (no full list rebuilds on every refresh).
+- Client polling has been replaced with live server-sent events; new recordings append and status changes stream in without periodic refresh calls.

@@ -36,7 +36,6 @@ const activeFeedNodes = new Map();
 const recordingNodes = new Map();
 const recordingDayNodes = new Map();
 let selectedFeedId = null;
-let refreshTimer = null;
 let refreshEnabled = true;
 let refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
 let showArchived = false;
@@ -45,6 +44,12 @@ let contextRecordingId = null;
 let recordingsInitialized = false;
 let latestRecordingStart = null;
 let preloadToken = 0;
+let eventSource = null;
+let progressTimer = null;
+let uiConfig = {
+  expectedRealtimeFactor: 0.7,
+  estimatedBytesPerSecond: 32000
+};
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
@@ -305,6 +310,7 @@ function applySearchFilter() {
   });
 }
 
+
 function setupContextMenu() {
   contextMenu = document.createElement("div");
   contextMenu.className = "context-menu";
@@ -401,6 +407,22 @@ function loadRefreshSettings() {
   refreshIntervalValue.textContent = `Every ${refreshIntervalSeconds} seconds`;
 }
 
+async function loadUiConfig() {
+  try {
+    const config = await fetchJson("/api/ui-config");
+    if (config && typeof config === "object") {
+      if (Number.isFinite(config.expectedRealtimeFactor)) {
+        uiConfig.expectedRealtimeFactor = config.expectedRealtimeFactor;
+      }
+      if (Number.isFinite(config.estimatedBytesPerSecond)) {
+        uiConfig.estimatedBytesPerSecond = config.estimatedBytesPerSecond;
+      }
+    }
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 function loadArchiveSettings() {
   const storedArchived = localStorage.getItem(STORAGE_KEYS.showArchived);
   showArchived = storedArchived === "true";
@@ -428,18 +450,19 @@ function applyRefreshSettings() {
 }
 
 function restartAutoRefresh() {
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
+  if (progressTimer) {
+    clearInterval(progressTimer);
+    progressTimer = null;
   }
 
   if (!refreshEnabled) {
+    disconnectRecordingStream();
     return;
   }
 
-  refreshTimer = setInterval(() => {
-    loadActiveFeeds().catch((err) => console.error(err));
-    loadRecordings().catch((err) => console.error(err));
+  connectRecordingStream();
+  progressTimer = setInterval(() => {
+    updateProcessingProgress();
   }, refreshIntervalSeconds * 1000);
 }
 
@@ -596,7 +619,8 @@ function selectFeed(feedId) {
   const selected = activeFeedNodes.get(feedId);
   updateRecordingHeader(selected?.feed ?? null);
   resetRecordingView();
-  loadRecordings();
+  loadRecordings({ force: true });
+  connectRecordingStream();
 }
 
 function updateRecordingHeader(feed) {
@@ -616,6 +640,7 @@ function resetRecordingView() {
   recordingNodes.clear();
   recordingDayNodes.clear();
   recordingsContainer.innerHTML = "";
+  disconnectRecordingStream();
 }
 
 async function loadRecordings(options = {}) {
@@ -695,7 +720,6 @@ async function appendNewRecordings() {
   }
 
   insertRecordings(recordings);
-  updateLatestRecordingStart(recordings);
 }
 
 async function refreshRecordingStatuses() {
@@ -722,6 +746,88 @@ async function refreshRecordingStatuses() {
       updateRecordingNode(node, recording);
     }
   });
+}
+
+function connectRecordingStream() {
+  disconnectRecordingStream();
+
+  if (!refreshEnabled || !selectedFeedId) {
+    return;
+  }
+
+  const url = `/api/recordings/stream?feedId=${encodeURIComponent(selectedFeedId)}`;
+  eventSource = new EventSource(url);
+
+  const handleEvent = (type) => async (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (!payload || payload.feedId !== selectedFeedId) {
+        return;
+      }
+
+      if (type === "archived") {
+        if (!showArchived) {
+          removeRecordingNode(payload.recordingId);
+          return;
+        }
+      }
+
+      const recording = await fetchJson(`/api/recordings/${payload.recordingId}`);
+      if (recording.isArchived && !showArchived) {
+        removeRecordingNode(payload.recordingId);
+        return;
+      }
+
+      if (recordingNodes.has(recording.id)) {
+        const node = recordingNodes.get(recording.id);
+        if (node) {
+          updateRecordingNode(node, recording);
+        }
+      } else {
+        insertRecordings([recording]);
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  eventSource.addEventListener("created", handleEvent("created"));
+  eventSource.addEventListener("updated", handleEvent("updated"));
+  eventSource.addEventListener("archived", handleEvent("archived"));
+}
+
+function disconnectRecordingStream() {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+}
+
+function removeRecordingNode(recordingId) {
+  const node = recordingNodes.get(recordingId);
+  if (!node) {
+    return;
+  }
+
+  const parentList = node.root.parentElement;
+  node.root.remove();
+  recordingNodes.delete(recordingId);
+
+  if (parentList && parentList.classList.contains("day-list")) {
+    const dayRoot = parentList.closest(".recording-day");
+    if (dayRoot) {
+      const dayKey = dayRoot.dataset.dayKey;
+      const dayEntry = dayKey ? recordingDayNodes.get(dayKey) : null;
+      if (dayEntry) {
+        const count = dayEntry.list.children.length;
+        dayEntry.count.textContent = `${count} calls`;
+        if (count === 0) {
+          dayEntry.root.remove();
+          recordingDayNodes.delete(dayKey);
+        }
+      }
+    }
+  }
 }
 
 function renderRecordings(recordings) {
@@ -874,9 +980,12 @@ function insertRecordings(recordings) {
     const label = key === todayKey ? "Today" : formatDateLabel(key);
     dayEntry.label.textContent = label;
 
-    recordingsForDay.sort((a, b) => (a.startUtc < b.startUtc ? 1 : -1));
-    recordingsForDay.forEach((recording) => {
-      const existing = recordingNodes.get(recording.id);
+  recordingsForDay.sort((a, b) => (a.startUtc < b.startUtc ? 1 : -1));
+  recordingsForDay.forEach((recording) => {
+    if (recording.isArchived && !showArchived) {
+      return;
+    }
+    const existing = recordingNodes.get(recording.id);
       if (existing) {
         updateRecordingNode(existing, recording);
         return;
@@ -902,6 +1011,8 @@ function insertRecordings(recordings) {
       }
     }
   });
+
+  updateLatestRecordingStart(recordings);
 }
 
 function captureDayScrollStates() {
@@ -977,6 +1088,31 @@ function restoreListScrollState(listEl, state) {
   const newOffset = anchorRect.top - containerRect.top;
   const delta = newOffset - state.anchorOffset;
   listEl.scrollTop = listEl.scrollTop + delta;
+}
+
+function updateProcessingProgress() {
+  const now = Date.now();
+  for (const node of recordingNodes.values()) {
+    if (node.currentStatus !== "Processing") {
+      continue;
+    }
+    if (!node.transcriptStartedUtc) {
+      continue;
+    }
+
+    const started = new Date(node.transcriptStartedUtc).getTime();
+    if (Number.isNaN(started)) {
+      continue;
+    }
+
+    const durationSeconds = Number.isFinite(node.durationSeconds) && node.durationSeconds > 0
+      ? node.durationSeconds
+      : 1;
+    const expectedSeconds = Math.max(durationSeconds / Math.max(uiConfig.expectedRealtimeFactor, 0.1), 1);
+    const elapsed = (now - started) / 1000;
+    const percent = Math.min(99, Math.max(5, (elapsed / expectedSeconds) * 100));
+    node.progressText.textContent = `${Math.round(percent)}%`;
+  }
 }
 
 async function archiveDay(dayKey) {
@@ -1074,6 +1210,8 @@ function updateRecordingNode(node, rec) {
   node.recordingId = rec.id;
   node.root.dataset.recordingId = rec.id;
   node.currentStatus = rec.transcriptStatus;
+  node.transcriptStartedUtc = rec.transcriptStartedUtc;
+  node.durationSeconds = rec.durationSeconds;
   const start = new Date(rec.startUtc);
   node.time.textContent = start.toLocaleString();
   const showStatus = rec.transcriptStatus !== "Complete";
@@ -1236,10 +1374,11 @@ navLinks.forEach((link) => {
 autoRefreshToggle.addEventListener("change", applyRefreshSettings);
 refreshIntervalInput.addEventListener("change", applyRefreshSettings);
 refreshIntervalInput.addEventListener("blur", applyRefreshSettings);
-showArchivedToggle.addEventListener("change", applyArchiveSettings);
+  showArchivedToggle.addEventListener("change", applyArchiveSettings);
 
 setupContextMenu();
 setupDragAndDrop();
+loadUiConfig();
 loadStates().catch((err) => console.error(err));
 loadActiveFeeds().catch((err) => console.error(err));
 loadRefreshSettings();
