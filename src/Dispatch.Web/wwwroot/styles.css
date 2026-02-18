@@ -287,10 +287,11 @@ h2 {
 .active-feed-card {
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 14px;
-  display: grid;
-  gap: 10px;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   cursor: pointer;
 }
 
@@ -299,27 +300,44 @@ h2 {
   box-shadow: 0 0 0 1px rgba(212, 72, 73, 0.4);
 }
 
-.active-feed-card header {
+.active-info {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
 }
 
 .active-title {
-  margin: 0;
-  font-size: 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .active-meta {
-  margin: 4px 0 0;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.active-meta::before {
+  content: "•";
+  margin-right: 8px;
+  color: var(--border-strong);
+}
+
+.active-actions button {
+  white-space: nowrap;
 }
 
 .active-actions {
   display: flex;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 button,

@@ -9,3 +9,4 @@ A transcription service for live dispatch audio feeds
 - Feed activity pane now allows full scroll through overflowed recordings.
 - Stopped feeds now remain visible in the active list so they can be restarted.
 - Right-hand recordings pane now flexes and scrolls correctly within the viewport layout.
+- Active feeds now render as compact single-line rows with truncation to prevent button overflow.
