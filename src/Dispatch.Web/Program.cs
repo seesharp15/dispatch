@@ -9,6 +9,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Http.Json;
 using System.Text.Json.Serialization;
 using System.Data;
+using DiscoveryBroadcastifyOptions = FeedDiscovery.Broadcastify.BroadcastifyOptions;
 
 string ResolveRecordingPath(string path, IHostEnvironment env)
 {
@@ -218,6 +219,36 @@ using (var scope = app.Services.CreateScope())
         db.Database.ExecuteSqlRaw("ALTER TABLE Recordings ADD COLUMN TranscriptStartedUtc TEXT NULL;");
     }
 }
+
+app.MapGet("/api/discovery/states", (IOptions<DiscoveryBroadcastifyOptions> options) =>
+{
+    var states = options.Value.StateIdMap.Keys
+        .OrderBy(s => s)
+        .ToList();
+
+    return Results.Ok(states);
+});
+
+app.MapGet("/api/discovery/feeds", async (string state, string? county, IFeedDiscoveryService service, CancellationToken ct) =>
+{
+    var feeds = string.IsNullOrWhiteSpace(county)
+        ? await service.GetFeedsAsync(state, ct)
+        : await service.GetFeedsAsync(state, county, ct);
+
+    var response = feeds.Select(feed =>
+    {
+        var feedId = feed.AudioSource.AbsolutePath.Trim('/');
+        return new DiscoveryFeedDto(
+            feed.State,
+            feed.County,
+            feed.FeedName,
+            feed.FeedStatus,
+            feedId,
+            feed.AudioSource.ToString());
+    });
+
+    return Results.Ok(response);
+});
 
 app.MapGet("/api/feeds", async (DispatchDbContext db, FeedCoordinator coordinator) =>
 {

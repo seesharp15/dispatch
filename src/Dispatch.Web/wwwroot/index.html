@@ -3,86 +3,129 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Dispatch Feed Monitor</title>
+    <title>Dispatch Studio</title>
     <link rel="stylesheet" href="styles.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
-    <div class="backdrop"></div>
-    <header class="app-header">
-      <div>
-        <p class="eyebrow">Dispatcher Audio Capture</p>
-        <h1>Dispatch Stream Studio</h1>
-        <p class="subtitle">Add Broadcastify feeds, capture radio traffic, and review transcripts in one place.</p>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-title">WEBB</span>
+          <nav class="nav-links">
+            <button class="nav-link active" type="button">Dashboard</button>
+            <button class="nav-link" type="button">Settings</button>
+          </nav>
+        </div>
+        <div class="user-meta">
+          <span class="user-role">Admin</span>
+          <span class="user-email">dispatch@local</span>
+          <button class="ghost" type="button">Sign Out</button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside class="panel sidebar">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Feed Discovery</p>
+              <h2>Audio Feeds</h2>
+            </div>
+            <button id="refresh-states" class="ghost" type="button">Refresh</button>
+          </div>
+
+          <div class="search-box">
+            <input id="feed-search" type="search" placeholder="Search feeds..." />
+          </div>
+
+          <div class="tree" id="feed-tree"></div>
+        </aside>
+
+        <main class="panel canvas" id="active-canvas">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Active Canvas</p>
+              <h2>Streaming Feeds</h2>
+              <p class="muted">Drag a feed from the left to start streaming & transcription.</p>
+            </div>
+            <div class="status-pill" id="active-status">Idle</div>
+          </div>
+
+          <div class="drop-zone" id="drop-zone">
+            <div class="drop-hint">
+              <p>Drop feeds here to activate</p>
+              <span>Streaming begins immediately</span>
+            </div>
+          </div>
+
+          <div id="active-feeds" class="active-feeds"></div>
+        </main>
+
+        <aside class="panel insights">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Feed Activity</p>
+              <h2 id="recordings-title">Select a feed</h2>
+              <p class="muted" id="recordings-subtitle">Choose an active feed to view recordings.</p>
+            </div>
+          </div>
+
+          <div id="recordings" class="recordings"></div>
+        </aside>
       </div>
-      <div class="status-panel">
-        <div class="status-line">
-          <span class="dot"></span>
-          <span id="status-text">Idle</span>
-        </div>
-        <p class="status-note">Auto-refresh every 10 seconds</p>
+    </div>
+
+    <template id="tree-state-template">
+      <div class="tree-node state" data-state>
+        <button class="tree-toggle" type="button">▸</button>
+        <span class="tree-label"></span>
+        <span class="tree-count"></span>
       </div>
-    </header>
+    </template>
 
-    <main>
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Add Feed</h2>
-          <p>Paste a Broadcastify web player link (or feed ID).</p>
-        </div>
-        <form id="feed-form" class="feed-form">
-          <label>
-            Feed Name (optional)
-            <input type="text" id="feed-name" placeholder="City Dispatch" />
-          </label>
-          <label>
-            Broadcastify Link or Feed ID
-            <input type="text" id="feed-url" placeholder="https://www.broadcastify.com/webPlayer/22835" required />
-          </label>
-          <button type="submit" class="primary">Add Feed</button>
-          <p id="form-error" class="error"></p>
-        </form>
-      </section>
+    <template id="tree-county-template">
+      <div class="tree-node county" data-county>
+        <button class="tree-toggle" type="button">▸</button>
+        <span class="tree-label"></span>
+        <span class="tree-count"></span>
+      </div>
+    </template>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Active Feeds</h2>
-          <p>Start or stop capture per feed. Click a feed to browse recordings.</p>
-        </div>
-        <div id="feeds" class="feed-grid"></div>
-      </section>
-    </main>
+    <template id="tree-feed-template">
+      <div class="tree-node feed" draggable="true">
+        <span class="tree-label"></span>
+        <span class="tree-status"></span>
+      </div>
+    </template>
 
-    <template id="feed-card-template">
-      <article class="feed-card">
-        <div class="feed-card-header">
+    <template id="active-feed-template">
+      <article class="active-feed-card">
+        <header>
           <div>
-            <h3 class="feed-name"></h3>
-            <p class="feed-meta"></p>
+            <h3 class="active-title"></h3>
+            <p class="active-meta"></p>
           </div>
-          <button class="toggle"></button>
-        </div>
-        <div class="feed-actions">
-          <button class="secondary recordings-toggle">Show recordings</button>
-          <a class="secondary" data-stream target="_blank">Open Live Stream</a>
-        </div>
-        <div class="recordings" hidden>
-          <div class="recordings-header">
-            <h4>Recent calls</h4>
-            <span class="recording-count"></span>
-          </div>
-          <div class="recording-list"></div>
+          <span class="badge"></span>
+        </header>
+        <div class="active-actions">
+          <button class="primary toggle">Stop</button>
+          <button class="ghost select">View activity</button>
         </div>
       </article>
     </template>
 
     <template id="recording-template">
       <div class="recording">
-        <div class="recording-info">
-          <p class="recording-time"></p>
-          <p class="recording-duration"></p>
+        <div class="recording-header">
+          <div>
+            <p class="recording-time"></p>
+            <p class="recording-duration"></p>
+          </div>
           <div class="recording-status">
             <span class="badge"></span>
             <span class="progress-text"></span>
@@ -94,6 +137,16 @@
         <audio controls class="recording-audio"></audio>
         <pre class="recording-text"></pre>
       </div>
+    </template>
+
+    <template id="recording-day-template">
+      <section class="recording-day">
+        <button class="day-header" type="button">
+          <span class="day-label"></span>
+          <span class="day-count"></span>
+        </button>
+        <div class="day-list"></div>
+      </section>
     </template>
 
     <script src="app.js"></script>

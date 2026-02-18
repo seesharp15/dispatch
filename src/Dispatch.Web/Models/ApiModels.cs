@@ -1,3 +1,5 @@
+using FeedDiscovery;
+
 namespace Dispatch.Web.Models;
 
 public record AddFeedRequest(string BroadcastifyUrl, string? Name);
@@ -27,3 +29,11 @@ public record RecordingDto(
     string? TranscriptText,
     string? TranscriptPath,
     string? TranscriptProvider);
+
+public record DiscoveryFeedDto(
+    string State,
+    string County,
+    string FeedName,
+    FeedStatus FeedStatus,
+    string FeedId,
+    string AudioUrl);
