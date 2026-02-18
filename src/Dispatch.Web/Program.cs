@@ -355,7 +355,7 @@ app.MapPost("/api/feeds/{id:guid}/stop", async (Guid id, DispatchDbContext db, F
     return Results.Ok();
 });
 
-app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchived, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, CancellationToken ct) =>
+app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchived, DateTimeOffset? since, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, CancellationToken ct) =>
 {
     var query = db.Recordings.AsNoTracking()
         .Where(r => r.FeedId == id);
@@ -363,6 +363,12 @@ app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchiv
     if (!includeArchived)
     {
         query = query.Where(r => !r.IsArchived);
+    }
+
+    if (since.HasValue)
+    {
+        var sinceUtc = since.Value.UtcDateTime;
+        query = query.Where(r => r.StartUtc > sinceUtc);
     }
 
     var recordings = await query
@@ -435,6 +441,40 @@ app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IO
         recording.TranscriptProvider,
         recording.IsArchived,
         recording.ArchivedUtc.HasValue ? AsUtc(recording.ArchivedUtc.Value) : null));
+});
+
+app.MapPost("/api/recordings/batch", async (BatchRecordingsRequest request, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, CancellationToken ct) =>
+{
+    if (request?.RecordingIds == null || request.RecordingIds.Count == 0)
+    {
+        return Results.Ok(Array.Empty<RecordingDto>());
+    }
+
+    var ids = request.RecordingIds.Distinct().ToArray();
+    var recordings = await db.Recordings.AsNoTracking()
+        .Where(r => ids.Contains(r.Id))
+        .ToListAsync(ct);
+
+    var queueInfo = await GetPendingQueueAsync(db, ct);
+
+    var response = recordings.Select(r => new RecordingDto(
+        r.Id,
+        r.FeedId,
+        r.FilePath,
+        AsUtc(r.StartUtc),
+        AsUtc(r.EndUtc),
+        r.DurationSeconds,
+        r.TranscriptStatus,
+        ComputeTranscriptProgress(r, options.Value, GetRecordingFileSize(r, env)),
+        queueInfo.Map.TryGetValue(r.Id, out var position) ? position : null,
+        queueInfo.Total > 0 ? queueInfo.Total : null,
+        r.TranscriptText,
+        r.TranscriptPath,
+        r.TranscriptProvider,
+        r.IsArchived,
+        r.ArchivedUtc.HasValue ? AsUtc(r.ArchivedUtc.Value) : null));
+
+    return Results.Ok(response);
 });
 
 app.MapPost("/api/recordings/{id:guid}/reprocess", async (Guid id, DispatchDbContext db, CancellationToken ct) =>

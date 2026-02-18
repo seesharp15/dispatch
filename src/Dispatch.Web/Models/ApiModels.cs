@@ -33,6 +33,8 @@ public record RecordingDto(
     bool IsArchived,
     DateTime? ArchivedUtc);
 
+public record BatchRecordingsRequest(IReadOnlyList<Guid> RecordingIds);
+
 public record DiscoveryFeedDto(
     string State,
     string County,

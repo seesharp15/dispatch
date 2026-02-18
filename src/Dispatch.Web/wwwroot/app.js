@@ -43,6 +43,7 @@ let showArchived = false;
 let contextMenu = null;
 let contextRecordingId = null;
 let recordingsInitialized = false;
+let latestRecordingStart = null;
 let preloadToken = 0;
 
 async function fetchJson(url, options) {
@@ -325,7 +326,7 @@ function setupContextMenu() {
 
     try {
       await fetchJson(`/api/recordings/${recordingId}/reprocess`, { method: "POST" });
-      await loadRecordings();
+      await loadRecordings({ force: true });
     } catch (error) {
       console.error(error);
     }
@@ -409,7 +410,7 @@ function loadArchiveSettings() {
 function applyArchiveSettings() {
   showArchived = showArchivedToggle.checked;
   localStorage.setItem(STORAGE_KEYS.showArchived, String(showArchived));
-  loadRecordings().catch((err) => console.error(err));
+  loadRecordings({ force: true }).catch((err) => console.error(err));
 }
 
 function applyRefreshSettings() {
@@ -611,20 +612,116 @@ function updateRecordingHeader(feed) {
 
 function resetRecordingView() {
   recordingsInitialized = false;
+  latestRecordingStart = null;
   recordingNodes.clear();
   recordingDayNodes.clear();
   recordingsContainer.innerHTML = "";
 }
 
-async function loadRecordings() {
+async function loadRecordings(options = {}) {
   if (!selectedFeedId) {
     return;
   }
 
+  const force = options.force === true;
+  if (force || !recordingsInitialized) {
+    const recordings = await fetchJson(
+      `/api/feeds/${selectedFeedId}/recordings?includeArchived=${showArchived}`
+    );
+    renderRecordings(recordings);
+    if (recordings.length === 0) {
+      latestRecordingStart = new Date().toISOString();
+    } else {
+      updateLatestRecordingStart(recordings);
+    }
+    return;
+  }
+
+  await appendNewRecordings();
+  await refreshRecordingStatuses();
+}
+
+function updateLatestRecordingStart(recordings) {
+  if (!recordings || recordings.length === 0) {
+    return;
+  }
+
+  let latest = latestRecordingStart ? new Date(latestRecordingStart) : null;
+  if (latest && Number.isNaN(latest.getTime())) {
+    latest = null;
+  }
+
+  recordings.forEach((recording) => {
+    const date = new Date(recording.startUtc);
+    if (Number.isNaN(date.getTime())) {
+      return;
+    }
+    if (!latest || date > latest) {
+      latest = date;
+    }
+  });
+
+  if (latest) {
+    latestRecordingStart = latest.toISOString();
+  }
+}
+
+function getSinceTimestamp() {
+  if (!latestRecordingStart) {
+    return null;
+  }
+
+  const since = new Date(latestRecordingStart);
+  if (Number.isNaN(since.getTime())) {
+    return null;
+  }
+
+  since.setSeconds(since.getSeconds() - 1);
+  return since.toISOString();
+}
+
+async function appendNewRecordings() {
+  const since = getSinceTimestamp();
+  if (!since) {
+    return;
+  }
+
   const recordings = await fetchJson(
-    `/api/feeds/${selectedFeedId}/recordings?includeArchived=${showArchived}`
+    `/api/feeds/${selectedFeedId}/recordings?includeArchived=${showArchived}&since=${encodeURIComponent(since)}`
   );
-  renderRecordings(recordings);
+
+  if (!recordings.length) {
+    return;
+  }
+
+  insertRecordings(recordings);
+  updateLatestRecordingStart(recordings);
+}
+
+async function refreshRecordingStatuses() {
+  const ids = [];
+  for (const [id, node] of recordingNodes.entries()) {
+    if (node.currentStatus === "Pending" || node.currentStatus === "Processing") {
+      ids.push(id);
+    }
+  }
+
+  if (ids.length === 0) {
+    return;
+  }
+
+  const response = await fetchJson("/api/recordings/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recordingIds: ids })
+  });
+
+  response.forEach((recording) => {
+    const node = recordingNodes.get(recording.id);
+    if (node) {
+      updateRecordingNode(node, recording);
+    }
+  });
 }
 
 function renderRecordings(recordings) {
@@ -652,44 +749,9 @@ function renderRecordings(recordings) {
   const orderedKeys = Array.from(groups.keys()).sort((a, b) => (a < b ? 1 : -1));
   const seenDayKeys = new Set(orderedKeys);
 
-  orderedKeys.forEach((key, index) => {
+  orderedKeys.forEach((key) => {
     const recordingsForDay = groups.get(key) || [];
-    let dayEntry = recordingDayNodes.get(key);
-    if (!dayEntry) {
-      const dayFragment = recordingDayTemplate.content.cloneNode(true);
-      const dayRoot = dayFragment.querySelector(".recording-day");
-      const dayToggle = dayFragment.querySelector(".day-toggle");
-      const dayArchive = dayFragment.querySelector(".day-archive");
-      const dayLabel = dayFragment.querySelector(".day-label");
-      const dayCount = dayFragment.querySelector(".day-count");
-      const dayList = dayFragment.querySelector(".day-list");
-
-      const expandedDefault = !recordingsInitialized && key === todayKey;
-      dayList.hidden = !expandedDefault;
-      dayEntry = {
-        key,
-        root: dayRoot,
-        toggle: dayToggle,
-        archive: dayArchive,
-        label: dayLabel,
-        count: dayCount,
-        list: dayList,
-        expanded: expandedDefault
-      };
-
-      dayToggle.addEventListener("click", () => {
-        dayEntry.expanded = !dayEntry.expanded;
-        dayEntry.list.hidden = !dayEntry.expanded;
-      });
-
-      dayArchive.addEventListener("click", async (event) => {
-        event.stopPropagation();
-        await archiveDay(key);
-      });
-
-      recordingDayNodes.set(key, dayEntry);
-      recordingsContainer.appendChild(dayRoot);
-    }
+    const dayEntry = ensureDayEntry(key, todayKey);
 
     const label = key === todayKey ? "Today" : formatDateLabel(key);
     dayEntry.label.textContent = label;
@@ -716,10 +778,6 @@ function renderRecordings(recordings) {
       }
     });
 
-    if (!recordingsInitialized && index === 0 && key === todayKey) {
-      dayEntry.expanded = true;
-      dayEntry.list.hidden = false;
-    }
   });
 
   for (const [key, entry] of recordingDayNodes.entries()) {
@@ -743,6 +801,107 @@ function renderRecordings(recordings) {
       requestAnimationFrame(() => restoreDayScrollStates(dayScrollStates));
     });
   }
+}
+
+function ensureDayEntry(key, todayKey) {
+  let dayEntry = recordingDayNodes.get(key);
+  if (dayEntry) {
+    return dayEntry;
+  }
+
+  const dayFragment = recordingDayTemplate.content.cloneNode(true);
+  const dayRoot = dayFragment.querySelector(".recording-day");
+  const dayToggle = dayFragment.querySelector(".day-toggle");
+  const dayArchive = dayFragment.querySelector(".day-archive");
+  const dayLabel = dayFragment.querySelector(".day-label");
+  const dayCount = dayFragment.querySelector(".day-count");
+  const dayList = dayFragment.querySelector(".day-list");
+
+  const expandedDefault = !recordingsInitialized && key === todayKey;
+  dayList.hidden = !expandedDefault;
+  dayRoot.dataset.dayKey = key;
+  dayEntry = {
+    key,
+    root: dayRoot,
+    toggle: dayToggle,
+    archive: dayArchive,
+    label: dayLabel,
+    count: dayCount,
+    list: dayList,
+    expanded: expandedDefault
+  };
+
+  dayToggle.addEventListener("click", () => {
+    dayEntry.expanded = !dayEntry.expanded;
+    dayEntry.list.hidden = !dayEntry.expanded;
+  });
+
+  dayArchive.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await archiveDay(key);
+  });
+
+  recordingDayNodes.set(key, dayEntry);
+  return dayEntry;
+}
+
+function insertRecordings(recordings) {
+  if (!recordings.length) {
+    return;
+  }
+
+  const emptyMessage = recordingsContainer.querySelector("p.muted");
+  if (emptyMessage) {
+    emptyMessage.remove();
+  }
+
+  const todayKey = toDateKey(new Date());
+  const groups = new Map();
+
+  recordings.forEach((recording) => {
+    const key = toDateKey(new Date(recording.startUtc));
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(recording);
+  });
+
+  const dayKeys = Array.from(groups.keys()).sort((a, b) => (a < b ? 1 : -1));
+  dayKeys.forEach((key) => {
+    const recordingsForDay = groups.get(key) || [];
+    const dayEntry = ensureDayEntry(key, todayKey);
+
+    const label = key === todayKey ? "Today" : formatDateLabel(key);
+    dayEntry.label.textContent = label;
+
+    recordingsForDay.sort((a, b) => (a.startUtc < b.startUtc ? 1 : -1));
+    recordingsForDay.forEach((recording) => {
+      const existing = recordingNodes.get(recording.id);
+      if (existing) {
+        updateRecordingNode(existing, recording);
+        return;
+      }
+
+      const shouldHighlight = shouldHighlightRecording(recording);
+      const node = getRecordingNode(recording, shouldHighlight);
+      dayEntry.list.insertBefore(node.root, dayEntry.list.firstChild);
+    });
+
+    dayEntry.count.textContent = `${dayEntry.list.children.length} calls`;
+
+    if (!dayEntry.root.isConnected) {
+      const existingDays = Array.from(recordingsContainer.querySelectorAll(".recording-day"));
+      const insertBefore = existingDays.find((element) => {
+        const dayKey = element.dataset.dayKey;
+        return dayKey && dayKey < key;
+      });
+      if (insertBefore) {
+        recordingsContainer.insertBefore(dayEntry.root, insertBefore);
+      } else {
+        recordingsContainer.appendChild(dayEntry.root);
+      }
+    }
+  });
 }
 
 function captureDayScrollStates() {
@@ -830,7 +989,7 @@ async function archiveDay(dayKey) {
       `/api/feeds/${selectedFeedId}/recordings/archive?day=${encodeURIComponent(dayKey)}`,
       { method: "POST" }
     );
-    await loadRecordings();
+    await loadRecordings({ force: true });
   } catch (error) {
     console.error(error);
   }
@@ -914,6 +1073,7 @@ function highlightNewRecording(node) {
 function updateRecordingNode(node, rec) {
   node.recordingId = rec.id;
   node.root.dataset.recordingId = rec.id;
+  node.currentStatus = rec.transcriptStatus;
   const start = new Date(rec.startUtc);
   node.time.textContent = start.toLocaleString();
   const showStatus = rec.transcriptStatus !== "Complete";
@@ -1000,7 +1160,7 @@ function toggleTranscript(node) {
 async function archiveRecording(recordingId) {
   try {
     await fetchJson(`/api/recordings/${recordingId}/archive`, { method: "POST" });
-    await loadRecordings();
+    await loadRecordings({ force: true });
   } catch (error) {
     console.error(error);
   }
