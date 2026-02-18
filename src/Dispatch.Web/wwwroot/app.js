@@ -628,8 +628,7 @@ async function loadRecordings() {
 }
 
 function renderRecordings(recordings) {
-  const previousScrollTop = recordingsContainer.scrollTop;
-  const wasNearTop = previousScrollTop < 8;
+  const scrollState = captureRecordingsScrollState();
 
   if (!recordings.length) {
     recordingsContainer.innerHTML = "<p class=\"muted\">No recordings yet.</p>";
@@ -742,9 +741,59 @@ function renderRecordings(recordings) {
 
   recordingsInitialized = true;
 
-  if (!wasNearTop) {
-    recordingsContainer.scrollTop = previousScrollTop;
+  if (scrollState) {
+    requestAnimationFrame(() => restoreRecordingsScrollState(scrollState));
   }
+}
+
+function captureRecordingsScrollState() {
+  const scrollTop = recordingsContainer.scrollTop;
+  if (scrollTop <= 0) {
+    return null;
+  }
+
+  const containerRect = recordingsContainer.getBoundingClientRect();
+  const items = recordingsContainer.querySelectorAll(".recording");
+  for (const item of items) {
+    const rect = item.getBoundingClientRect();
+    if (rect.bottom > containerRect.top + 4) {
+      const anchorId = item.dataset.recordingId;
+      if (anchorId) {
+        return {
+          scrollTop,
+          anchorId,
+          anchorOffset: rect.top - containerRect.top
+        };
+      }
+    }
+  }
+
+  return { scrollTop, anchorId: null, anchorOffset: 0 };
+}
+
+function restoreRecordingsScrollState(state) {
+  if (!state) {
+    return;
+  }
+
+  if (!state.anchorId) {
+    recordingsContainer.scrollTop = state.scrollTop;
+    return;
+  }
+
+  const anchor = recordingsContainer.querySelector(
+    `.recording[data-recording-id="${state.anchorId}"]`
+  );
+  if (!anchor) {
+    recordingsContainer.scrollTop = state.scrollTop;
+    return;
+  }
+
+  const containerRect = recordingsContainer.getBoundingClientRect();
+  const anchorRect = anchor.getBoundingClientRect();
+  const newOffset = anchorRect.top - containerRect.top;
+  const delta = newOffset - state.anchorOffset;
+  recordingsContainer.scrollTop = state.scrollTop + delta;
 }
 
 async function archiveDay(dayKey) {
