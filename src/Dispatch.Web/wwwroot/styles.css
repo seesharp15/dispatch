@@ -33,6 +33,10 @@ body {
   height: 100%;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -104,6 +108,8 @@ body {
 
 .settings-page {
   padding: 20px;
+  flex: 1;
+  min-height: 0;
 }
 
 .settings-panel {

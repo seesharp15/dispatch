@@ -258,10 +258,14 @@ function showPage(page) {
   const isDashboard = page === "dashboard";
   dashboardSection.hidden = !isDashboard;
   settingsSection.hidden = isDashboard;
+  dashboardSection.style.display = isDashboard ? "grid" : "none";
+  settingsSection.style.display = isDashboard ? "none" : "block";
 
   navLinks.forEach((link) => {
     link.classList.toggle("active", link.dataset.page === page);
   });
+
+  window.scrollTo({ top: 0, behavior: "auto" });
 }
 
 function loadRefreshSettings() {
