@@ -30,3 +30,4 @@ A transcription service for live dispatch audio feeds
 - Completed recordings no longer display a status badge, keeping focus on in-progress/queued states.
 - Broadcastify discovery results are now cached per state for 30 days and only fetched on state expansion.
 - Status badges now color-code Live/Processing as green, Pending as orange, and Paused/Failed in red.
+- Queue indicators now show position and total size as `Queue: (position/total)`.

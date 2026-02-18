@@ -829,7 +829,8 @@ function updateRecordingNode(node, rec) {
     node.progressText.textContent = `${percent}%`;
   } else if (rec.transcriptStatus === "Pending") {
     if (rec.transcriptQueuePosition) {
-      node.progressText.textContent = `Queue #${rec.transcriptQueuePosition}`;
+      const total = rec.transcriptQueueTotal || rec.transcriptQueuePosition;
+      node.progressText.textContent = `Queue: (${rec.transcriptQueuePosition}/${total})`;
     } else {
       node.progressText.textContent = "Queued";
     }

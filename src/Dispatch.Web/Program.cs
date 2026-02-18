@@ -106,7 +106,7 @@ long? GetRecordingFileSize(Recording recording, IWebHostEnvironment env)
     }
 }
 
-async Task<Dictionary<Guid, int>> GetPendingQueuePositionsAsync(DispatchDbContext db, CancellationToken cancellationToken)
+async Task<(Dictionary<Guid, int> Map, int Total)> GetPendingQueueAsync(DispatchDbContext db, CancellationToken cancellationToken)
 {
     var pendingIds = await db.Recordings.AsNoTracking()
         .Where(r => r.TranscriptStatus == TranscriptStatus.Pending && !r.IsArchived)
@@ -120,7 +120,7 @@ async Task<Dictionary<Guid, int>> GetPendingQueuePositionsAsync(DispatchDbContex
         map[pendingIds[i]] = i + 1;
     }
 
-    return map;
+    return (map, pendingIds.Count);
 }
 
 var builder = WebApplication.CreateBuilder(args);
@@ -369,7 +369,7 @@ app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchiv
         .OrderByDescending(r => r.StartUtc)
         .ToListAsync(ct);
 
-    var queuePositions = await GetPendingQueuePositionsAsync(db, ct);
+    var queueInfo = await GetPendingQueueAsync(db, ct);
 
     var response = recordings.Select(r => new RecordingDto(
         r.Id,
@@ -380,7 +380,8 @@ app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchiv
         r.DurationSeconds,
         r.TranscriptStatus,
         ComputeTranscriptProgress(r, options.Value, GetRecordingFileSize(r, env)),
-        queuePositions.TryGetValue(r.Id, out var position) ? position : null,
+        queueInfo.Map.TryGetValue(r.Id, out var position) ? position : null,
+        queueInfo.Total > 0 ? queueInfo.Total : null,
         r.TranscriptText,
         r.TranscriptPath,
         r.TranscriptProvider,
@@ -416,7 +417,7 @@ app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IO
         return Results.NotFound();
     }
 
-    var queuePositions = await GetPendingQueuePositionsAsync(db, ct);
+    var queueInfo = await GetPendingQueueAsync(db, ct);
 
     return Results.Ok(new RecordingDto(
         recording.Id,
@@ -427,7 +428,8 @@ app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IO
         recording.DurationSeconds,
         recording.TranscriptStatus,
         ComputeTranscriptProgress(recording, options.Value, GetRecordingFileSize(recording, env)),
-        queuePositions.TryGetValue(recording.Id, out var position) ? position : null,
+        queueInfo.Map.TryGetValue(recording.Id, out var position) ? position : null,
+        queueInfo.Total > 0 ? queueInfo.Total : null,
         recording.TranscriptText,
         recording.TranscriptPath,
         recording.TranscriptProvider,

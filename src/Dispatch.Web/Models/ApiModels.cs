@@ -26,6 +26,7 @@ public record RecordingDto(
     TranscriptStatus TranscriptStatus,
     double TranscriptProgress,
     int? TranscriptQueuePosition,
+    int? TranscriptQueueTotal,
     string? TranscriptText,
     string? TranscriptPath,
     string? TranscriptProvider,
