@@ -21,3 +21,4 @@ A transcription service for live dispatch audio feeds
 - State treeview now pins “Statewide” to the top before alphabetized counties.
 - Start/stop controls now optimistically update the UI for immediate feedback while the request completes.
 - Active feeds now include a remove (X) control to drop a stream from the list.
+- UI corner radii have been tightened to a subtle, near-square look across controls and panels.
