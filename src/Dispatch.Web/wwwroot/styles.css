@@ -121,6 +121,9 @@ body {
   display: grid;
   gap: 20px;
   padding: 20px;
+  overflow-y: auto;
+  max-height: 100vh;
+  min-height: 0;
 }
 
 .settings-card {
@@ -234,6 +237,8 @@ h2 {
   padding: 8px 10px 20px;
   overflow-y: auto;
   flex: 1;
+  max-height: 100vh;
+  min-height: 0;
 }
 
 .tree-children {
@@ -346,6 +351,8 @@ h2 {
   gap: 14px;
   padding: 0 20px 20px;
   overflow-y: auto;
+  max-height: 100vh;
+  min-height: 0;
 }
 
 .active-feed-card {
@@ -432,6 +439,7 @@ button,
   gap: 16px;
   flex: 1;
   min-height: 0;
+  max-height: 100vh;
 }
 
 .recording-day {

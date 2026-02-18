@@ -12,3 +12,4 @@ A transcription service for live dispatch audio feeds
 - Active feeds now render as compact single-line rows with truncation to prevent button overflow.
 - Settings page now allows toggling auto-refresh and adjusting the refresh interval.
 - Settings navigation now properly swaps the dashboard and settings view (no stacking).
+- Scrollable list containers now cap at viewport height with overflow scrolling.
