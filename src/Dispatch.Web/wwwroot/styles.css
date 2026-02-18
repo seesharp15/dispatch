@@ -392,6 +392,21 @@ h2 {
   cursor: pointer;
 }
 
+.active-feed-card.feed-flash {
+  animation: feedFlash 3.5s ease-out;
+  border-color: rgba(59, 162, 114, 0.6);
+  box-shadow: 0 0 0 1px rgba(59, 162, 114, 0.35);
+}
+
+@keyframes feedFlash {
+  0% {
+    background: rgba(59, 162, 114, 0.2);
+  }
+  100% {
+    background: var(--panel-2);
+  }
+}
+
 .active-feed-card.selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px rgba(212, 72, 73, 0.4);

@@ -35,6 +35,7 @@ const stateStore = new Map();
 const activeFeedNodes = new Map();
 const recordingNodes = new Map();
 const recordingDayNodes = new Map();
+const feedFlashTimers = new Map();
 let selectedFeedId = null;
 let refreshEnabled = true;
 let refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
@@ -604,6 +605,25 @@ function updateActiveFeedCard(entry) {
   entry.card.classList.toggle("selected", feed.id === selectedFeedId);
 }
 
+function flashFeedCard(feedId) {
+  const entry = activeFeedNodes.get(feedId);
+  if (!entry) {
+    return;
+  }
+
+  entry.card.classList.add("feed-flash");
+  const existing = feedFlashTimers.get(feedId);
+  if (existing) {
+    clearTimeout(existing);
+  }
+
+  const timer = setTimeout(() => {
+    entry.card.classList.remove("feed-flash");
+    feedFlashTimers.delete(feedId);
+  }, 4000);
+  feedFlashTimers.set(feedId, timer);
+}
+
 function selectFeed(feedId) {
   selectedFeedId = feedId;
   for (const entry of activeFeedNodes.values()) {
@@ -756,6 +776,9 @@ function connectRecordingStream() {
     try {
       const payload = JSON.parse(event.data);
       if (!payload || payload.feedId !== selectedFeedId) {
+        if (payload && type === "created") {
+          flashFeedCard(payload.feedId);
+        }
         return;
       }
 
@@ -779,6 +802,10 @@ function connectRecordingStream() {
         }
       } else {
         insertRecordings([recording]);
+      }
+
+      if (type === "created") {
+        flashFeedCard(recording.feedId);
       }
     } catch (error) {
       console.error(error);
