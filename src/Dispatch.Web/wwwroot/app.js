@@ -322,12 +322,8 @@ function hideContextMenu() {
 
 async function loadActiveFeeds() {
   const feeds = await fetchJson("/api/feeds");
-  const runningCount = feeds.filter((feed) => feed.isRunning).length;
-  activeStatus.textContent = feeds.length
-    ? `${runningCount} live • ${feeds.length} total`
-    : "No feeds added";
-
   renderActiveFeeds(feeds);
+  updateActiveStatus(feeds);
 }
 
 function showPage(page) {
@@ -431,6 +427,18 @@ function renderActiveFeeds(feeds) {
 
 }
 
+function updateActiveStatus(feeds) {
+  const runningCount = feeds.filter((feed) => feed.isRunning).length;
+  activeStatus.textContent = feeds.length
+    ? `${runningCount} live • ${feeds.length} total`
+    : "No feeds added";
+}
+
+function updateActiveStatusFromNodes() {
+  const feeds = Array.from(activeFeedNodes.values()).map((entry) => entry.feed);
+  updateActiveStatus(feeds);
+}
+
 function createActiveFeedCard(feed) {
   const fragment = activeFeedTemplate.content.cloneNode(true);
   const card = fragment.querySelector(".active-feed-card");
@@ -445,12 +453,23 @@ function createActiveFeedCard(feed) {
   toggle.addEventListener("click", async (event) => {
     event.stopPropagation();
     toggle.disabled = true;
+    const nextState = !feed.isRunning;
+    const prevState = feed.isRunning;
+    const prevActive = feed.isActive;
+    feed.isRunning = nextState;
+    feed.isActive = nextState || prevActive;
+    updateActiveFeedCard(entry);
+    updateActiveStatusFromNodes();
     try {
-      const endpoint = feed.isRunning ? "stop" : "start";
+      const endpoint = nextState ? "start" : "stop";
       await fetchJson(`/api/feeds/${feed.id}/${endpoint}`, { method: "POST" });
       await loadActiveFeeds();
     } catch (error) {
       console.error(error);
+      feed.isRunning = prevState;
+      feed.isActive = prevActive;
+      updateActiveFeedCard(entry);
+      updateActiveStatusFromNodes();
     } finally {
       toggle.disabled = false;
     }

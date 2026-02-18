@@ -19,3 +19,4 @@ A transcription service for live dispatch audio feeds
 - Right-clicking a recording now provides a reprocess transcript action, with the transcript button aligned to the right in the row.
 - Double-clicking a recording toggles the transcript open/closed, matching the transcript button behavior.
 - State treeview now pins “Statewide” to the top before alphabetized counties.
+- Start/stop controls now optimistically update the UI for immediate feedback while the request completes.
