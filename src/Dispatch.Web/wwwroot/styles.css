@@ -415,6 +415,12 @@ h2 {
   flex-shrink: 0;
 }
 
+.active-actions .remove {
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
 button,
 .ghost,
 .primary {

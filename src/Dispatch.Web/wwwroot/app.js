@@ -447,8 +447,9 @@ function createActiveFeedCard(feed) {
   const badge = fragment.querySelector(".badge");
   const toggle = fragment.querySelector(".toggle");
   const select = fragment.querySelector(".select");
+  const remove = fragment.querySelector(".remove");
 
-  const entry = { feed, card, title, meta, badge, toggle, select };
+  const entry = { feed, card, title, meta, badge, toggle, select, remove };
 
   toggle.addEventListener("click", async (event) => {
     event.stopPropagation();
@@ -478,6 +479,36 @@ function createActiveFeedCard(feed) {
   select.addEventListener("click", (event) => {
     event.stopPropagation();
     selectFeed(feed.id);
+  });
+
+  remove.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    remove.disabled = true;
+    try {
+      if (feed.isRunning) {
+        await fetchJson(`/api/feeds/${feed.id}/stop`, { method: "POST" });
+      }
+      feed.isActive = false;
+      feed.isRunning = false;
+      activeFeedNodes.delete(feed.id);
+      card.remove();
+      updateActiveStatusFromNodes();
+
+      if (activeFeedNodes.size === 0) {
+        activeFeedsContainer.innerHTML = "<p class=\"muted\">No active feeds yet.</p>";
+      }
+
+      if (selectedFeedId === feed.id) {
+        selectedFeedId = null;
+        updateRecordingHeader(null);
+        recordingsContainer.innerHTML = "";
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      await loadActiveFeeds();
+      remove.disabled = false;
+    }
   });
 
   card.addEventListener("click", () => selectFeed(feed.id));

@@ -20,3 +20,4 @@ A transcription service for live dispatch audio feeds
 - Double-clicking a recording toggles the transcript open/closed, matching the transcript button behavior.
 - State treeview now pins “Statewide” to the top before alphabetized counties.
 - Start/stop controls now optimistically update the UI for immediate feedback while the request completes.
+- Active feeds now include a remove (X) control to drop a stream from the list.
