@@ -32,6 +32,7 @@ const STORAGE_KEYS = {
 const stateStore = new Map();
 const activeFeedNodes = new Map();
 const recordingNodes = new Map();
+const recordingDayNodes = new Map();
 let selectedFeedId = null;
 let refreshTimer = null;
 let refreshEnabled = true;
@@ -39,6 +40,7 @@ let refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
 let showArchived = false;
 let contextMenu = null;
 let contextRecordingId = null;
+let recordingsInitialized = false;
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
@@ -549,6 +551,7 @@ function selectFeed(feedId) {
 
   const selected = activeFeedNodes.get(feedId);
   updateRecordingHeader(selected?.feed ?? null);
+  resetRecordingView();
   loadRecordings();
 }
 
@@ -563,6 +566,13 @@ function updateRecordingHeader(feed) {
   recordingsSubtitle.textContent = `${feed.feedIdentifier} • ${feed.broadcastifyUrl}`;
 }
 
+function resetRecordingView() {
+  recordingsInitialized = false;
+  recordingNodes.clear();
+  recordingDayNodes.clear();
+  recordingsContainer.innerHTML = "";
+}
+
 async function loadRecordings() {
   if (!selectedFeedId) {
     return;
@@ -575,9 +585,14 @@ async function loadRecordings() {
 }
 
 function renderRecordings(recordings) {
-  recordingsContainer.innerHTML = "";
+  const previousScrollTop = recordingsContainer.scrollTop;
+  const wasNearTop = previousScrollTop < 8;
+
   if (!recordings.length) {
     recordingsContainer.innerHTML = "<p class=\"muted\">No recordings yet.</p>";
+    recordingDayNodes.clear();
+    recordingNodes.clear();
+    recordingsInitialized = true;
     return;
   }
 
@@ -593,41 +608,98 @@ function renderRecordings(recordings) {
   });
 
   const orderedKeys = Array.from(groups.keys()).sort((a, b) => (a < b ? 1 : -1));
+  const seenDayKeys = new Set(orderedKeys);
 
-  orderedKeys.forEach((key) => {
+  orderedKeys.forEach((key, index) => {
     const recordingsForDay = groups.get(key) || [];
-    const dayFragment = recordingDayTemplate.content.cloneNode(true);
-    const dayRoot = dayFragment.querySelector(".recording-day");
-    const dayToggle = dayFragment.querySelector(".day-toggle");
-    const dayArchive = dayFragment.querySelector(".day-archive");
-    const dayLabel = dayFragment.querySelector(".day-label");
-    const dayCount = dayFragment.querySelector(".day-count");
-    const dayList = dayFragment.querySelector(".day-list");
+    let dayEntry = recordingDayNodes.get(key);
+    if (!dayEntry) {
+      const dayFragment = recordingDayTemplate.content.cloneNode(true);
+      const dayRoot = dayFragment.querySelector(".recording-day");
+      const dayToggle = dayFragment.querySelector(".day-toggle");
+      const dayArchive = dayFragment.querySelector(".day-archive");
+      const dayLabel = dayFragment.querySelector(".day-label");
+      const dayCount = dayFragment.querySelector(".day-count");
+      const dayList = dayFragment.querySelector(".day-list");
+
+      const expandedDefault = !recordingsInitialized && key === todayKey;
+      dayList.hidden = !expandedDefault;
+      dayEntry = {
+        key,
+        root: dayRoot,
+        toggle: dayToggle,
+        archive: dayArchive,
+        label: dayLabel,
+        count: dayCount,
+        list: dayList,
+        expanded: expandedDefault
+      };
+
+      dayToggle.addEventListener("click", () => {
+        dayEntry.expanded = !dayEntry.expanded;
+        dayEntry.list.hidden = !dayEntry.expanded;
+      });
+
+      dayArchive.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await archiveDay(key);
+      });
+
+      recordingDayNodes.set(key, dayEntry);
+      recordingsContainer.appendChild(dayRoot);
+    }
 
     const label = key === todayKey ? "Today" : formatDateLabel(key);
-    dayLabel.textContent = label;
-    dayCount.textContent = `${recordingsForDay.length} calls`;
+    dayEntry.label.textContent = label;
+    dayEntry.count.textContent = `${recordingsForDay.length} calls`;
 
-    let expanded = key === todayKey;
-    dayList.hidden = !expanded;
-
-    dayToggle.addEventListener("click", () => {
-      expanded = !expanded;
-      dayList.hidden = !expanded;
-    });
-
-    dayArchive.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      await archiveDay(key);
-    });
+    const desiredIds = recordingsForDay.map((recording) => recording.id);
+    const desiredSet = new Set(desiredIds);
 
     recordingsForDay.forEach((recording) => {
       const node = getRecordingNode(recording);
-      dayList.appendChild(node.root);
+      dayEntry.list.appendChild(node.root);
     });
 
-    recordingsContainer.appendChild(dayRoot);
+    Array.from(dayEntry.list.children).forEach((child) => {
+      const recordingId = child.dataset?.recordingId;
+      if (recordingId && !desiredSet.has(recordingId)) {
+        const existing = recordingNodes.get(recordingId);
+        if (existing) {
+          recordingNodes.delete(recordingId);
+        }
+        child.remove();
+      }
+    });
+
+    if (!recordingsInitialized && index === 0 && key === todayKey) {
+      dayEntry.expanded = true;
+      dayEntry.list.hidden = false;
+    }
   });
+
+  for (const [key, entry] of recordingDayNodes.entries()) {
+    if (!seenDayKeys.has(key)) {
+      entry.root.remove();
+      recordingDayNodes.delete(key);
+    }
+  }
+
+  const fragment = document.createDocumentFragment();
+  orderedKeys.forEach((key) => {
+    const entry = recordingDayNodes.get(key);
+    if (entry) {
+      fragment.appendChild(entry.root);
+    }
+  });
+  recordingsContainer.innerHTML = "";
+  recordingsContainer.appendChild(fragment);
+
+  recordingsInitialized = true;
+
+  if (!wasNearTop) {
+    recordingsContainer.scrollTop = previousScrollTop;
+  }
 }
 
 async function archiveDay(dayKey) {
@@ -707,6 +779,7 @@ function highlightNewRecording(node) {
 
 function updateRecordingNode(node, rec) {
   node.recordingId = rec.id;
+  node.root.dataset.recordingId = rec.id;
   const start = new Date(rec.startUtc);
   node.time.textContent = start.toLocaleString();
   node.duration.textContent = `${rec.durationSeconds.toFixed(1)}s`;
