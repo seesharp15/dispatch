@@ -7,3 +7,4 @@ A transcription service for live dispatch audio feeds
 - Local SQLite database artifacts are now ignored to keep repo clean.
 - Redesigned the web UI to mirror the WEBB-style three-pane layout with feed discovery tree, drag-and-drop activation, and recordings grouped by day in the right pane.
 - Feed activity pane now allows full scroll through overflowed recordings.
+- Stopped feeds now remain visible in the active list so they can be restarted.

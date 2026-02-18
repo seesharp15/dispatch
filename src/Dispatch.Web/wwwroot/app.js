@@ -234,13 +234,12 @@ function applySearchFilter() {
 
 async function loadActiveFeeds() {
   const feeds = await fetchJson("/api/feeds");
-  const activeFeeds = feeds.filter((feed) => feed.isActive || feed.isRunning);
+  const runningCount = feeds.filter((feed) => feed.isRunning).length;
+  activeStatus.textContent = feeds.length
+    ? `${runningCount} live • ${feeds.length} total`
+    : "No feeds added";
 
-  activeStatus.textContent = activeFeeds.length
-    ? `${activeFeeds.length} active`
-    : "Idle";
-
-  renderActiveFeeds(activeFeeds);
+  renderActiveFeeds(feeds);
 }
 
 function renderActiveFeeds(feeds) {
