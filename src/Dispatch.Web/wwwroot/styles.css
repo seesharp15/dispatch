@@ -1,0 +1,338 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f0ea;
+  --panel: rgba(255, 255, 255, 0.86);
+  --panel-border: rgba(15, 23, 42, 0.08);
+  --text: #111827;
+  --muted: #4b5563;
+  --accent: #0f766e;
+  --accent-strong: #115e59;
+  --accent-soft: rgba(15, 118, 110, 0.16);
+  --danger: #b91c1c;
+  --shadow: 0 24px 50px rgba(15, 23, 42, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at top right, #fef3c7, transparent 45%),
+    radial-gradient(circle at 20% 20%, #ccfbf1, transparent 40%),
+    linear-gradient(160deg, #f9fafb 10%, #f1f5f9 80%);
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 80% 10%, rgba(15, 118, 110, 0.12), transparent 45%),
+    radial-gradient(circle at 10% 80%, rgba(251, 191, 36, 0.14), transparent 55%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.app-header,
+main {
+  position: relative;
+  z-index: 1;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent-strong);
+  font-size: 0.75rem;
+  margin: 0 0 8px 0;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+}
+
+.subtitle {
+  margin: 12px 0 0;
+  color: var(--muted);
+  max-width: 520px;
+}
+
+.status-panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 16px 20px;
+  box-shadow: var(--shadow);
+  min-width: 220px;
+  backdrop-filter: blur(12px);
+}
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.status-note {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px rgba(15, 118, 110, 0.6);
+}
+
+main {
+  display: grid;
+  gap: 24px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 22px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.panel-header h2 {
+  margin: 0 0 6px 0;
+}
+
+.panel-header p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.feed-form {
+  margin-top: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+input {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  font-size: 1rem;
+  font-family: inherit;
+}
+
+button,
+.secondary,
+a.secondary {
+  border: none;
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+button.primary {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 12px 24px rgba(15, 118, 110, 0.24);
+}
+
+button.primary:hover,
+.secondary:hover,
+a.secondary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 20px rgba(15, 118, 110, 0.2);
+}
+
+button.secondary,
+.secondary,
+a.secondary {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  color: var(--text);
+}
+
+.error {
+  color: var(--danger);
+  margin: 0;
+}
+
+.feed-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.feed-card {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 18px;
+  padding: 18px;
+  background: white;
+  display: grid;
+  gap: 12px;
+}
+
+.feed-card.running {
+  border-color: rgba(15, 118, 110, 0.4);
+  box-shadow: 0 10px 24px rgba(15, 118, 110, 0.18);
+}
+
+.feed-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.feed-name {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.feed-meta {
+  margin: 4px 0 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.feed-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.recordings {
+  border-top: 1px dashed rgba(15, 23, 42, 0.18);
+  padding-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.recordings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.recording-list {
+  display: grid;
+  gap: 12px;
+}
+
+.recording {
+  background: rgba(15, 23, 42, 0.04);
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.recording-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.recording-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.recording-duration {
+  margin: 0;
+}
+
+.recording-time {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.badge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.7rem;
+}
+
+.progress-text {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.progress {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, rgba(15, 118, 110, 0.6), rgba(15, 118, 110, 0.95));
+  transition: width 0.3s ease;
+}
+
+.recording-text {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.8);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+
+@media (max-width: 720px) {
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .status-panel {
+    width: 100%;
+  }
+}
