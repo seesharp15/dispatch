@@ -456,6 +456,18 @@ button,
 .primary {
   background: var(--accent);
   color: #fff;
+  border: 1px solid transparent;
+}
+
+.primary.is-start {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.primary.is-stop {
+  background: var(--accent);
+  color: #fff;
 }
 
 .ghost {
@@ -478,7 +490,7 @@ button,
 .recording-day {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  overflow: hidden;
+  overflow: auto;
   min-height: 0;
   background: rgba(255, 255, 255, 0.02);
 }

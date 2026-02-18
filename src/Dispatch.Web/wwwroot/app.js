@@ -581,6 +581,8 @@ function updateActiveFeedCard(entry) {
   entry.badge.classList.remove("badge-live", "badge-paused");
   entry.badge.classList.add(feed.isRunning ? "badge-live" : "badge-paused");
   entry.toggle.textContent = feed.isRunning ? "Stop" : "Start";
+  entry.toggle.classList.remove("is-start", "is-stop");
+  entry.toggle.classList.add(feed.isRunning ? "is-stop" : "is-start");
   entry.card.classList.toggle("selected", feed.id === selectedFeedId);
 }
 
