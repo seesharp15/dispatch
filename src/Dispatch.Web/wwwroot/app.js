@@ -118,7 +118,21 @@ async function loadStateFeeds(stateEntry) {
   stateEntry.children.innerHTML = "";
   stateEntry.counties.clear();
 
-  const sortedCounties = Array.from(countyMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  const sortedCounties = Array.from(countyMap.entries()).sort((a, b) => {
+    const aKey = a[0];
+    const bKey = b[0];
+    const aIsStatewide = aKey.toLowerCase() === "statewide";
+    const bIsStatewide = bKey.toLowerCase() === "statewide";
+
+    if (aIsStatewide && !bIsStatewide) {
+      return -1;
+    }
+    if (!aIsStatewide && bIsStatewide) {
+      return 1;
+    }
+
+    return aKey.localeCompare(bKey);
+  });
   sortedCounties.forEach(([countyName, countyFeeds]) => {
     const countyFragment = treeCountyTemplate.content.cloneNode(true);
     const countyNode = countyFragment.querySelector(".tree-node");
