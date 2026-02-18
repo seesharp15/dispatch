@@ -628,7 +628,7 @@ async function loadRecordings() {
 }
 
 function renderRecordings(recordings) {
-  const scrollState = captureRecordingsScrollState();
+  const dayScrollStates = captureDayScrollStates();
 
   if (!recordings.length) {
     recordingsContainer.innerHTML = "<p class=\"muted\">No recordings yet.</p>";
@@ -738,22 +738,48 @@ function renderRecordings(recordings) {
 
   recordingsInitialized = true;
 
-  if (scrollState) {
+  if (dayScrollStates.size > 0) {
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => restoreRecordingsScrollState(scrollState));
+      requestAnimationFrame(() => restoreDayScrollStates(dayScrollStates));
     });
   }
 }
 
-function captureRecordingsScrollState() {
-  const scrollTop = recordingsContainer.scrollTop;
-  const canScroll = recordingsContainer.scrollHeight > recordingsContainer.clientHeight;
+function captureDayScrollStates() {
+  const states = new Map();
+  for (const [key, entry] of recordingDayNodes.entries()) {
+    if (entry.list.hidden) {
+      continue;
+    }
+
+    const state = captureListScrollState(entry.list);
+    if (state) {
+      states.set(key, state);
+    }
+  }
+  return states;
+}
+
+function restoreDayScrollStates(states) {
+  for (const [key, state] of states.entries()) {
+    const entry = recordingDayNodes.get(key);
+    if (!entry || entry.list.hidden) {
+      continue;
+    }
+
+    restoreListScrollState(entry.list, state);
+  }
+}
+
+function captureListScrollState(listEl) {
+  const scrollTop = listEl.scrollTop;
+  const canScroll = listEl.scrollHeight > listEl.clientHeight;
   if (!canScroll || scrollTop <= 0) {
     return scrollTop > 0 ? { scrollTop, anchorId: null, anchorOffset: 0 } : null;
   }
 
-  const containerRect = recordingsContainer.getBoundingClientRect();
-  const items = recordingsContainer.querySelectorAll(".recording");
+  const containerRect = listEl.getBoundingClientRect();
+  const items = listEl.querySelectorAll(".recording");
   for (const item of items) {
     const rect = item.getBoundingClientRect();
     if (rect.bottom > containerRect.top + 4) {
@@ -771,29 +797,27 @@ function captureRecordingsScrollState() {
   return { scrollTop, anchorId: null, anchorOffset: 0 };
 }
 
-function restoreRecordingsScrollState(state) {
+function restoreListScrollState(listEl, state) {
   if (!state) {
     return;
   }
 
   if (!state.anchorId) {
-    recordingsContainer.scrollTop = state.scrollTop;
+    listEl.scrollTop = state.scrollTop;
     return;
   }
 
-  const anchor = recordingsContainer.querySelector(
-    `.recording[data-recording-id="${state.anchorId}"]`
-  );
+  const anchor = listEl.querySelector(`.recording[data-recording-id="${state.anchorId}"]`);
   if (!anchor) {
-    recordingsContainer.scrollTop = state.scrollTop;
+    listEl.scrollTop = state.scrollTop;
     return;
   }
 
-  const containerRect = recordingsContainer.getBoundingClientRect();
+  const containerRect = listEl.getBoundingClientRect();
   const anchorRect = anchor.getBoundingClientRect();
   const newOffset = anchorRect.top - containerRect.top;
   const delta = newOffset - state.anchorOffset;
-  recordingsContainer.scrollTop = state.scrollTop + delta;
+  listEl.scrollTop = listEl.scrollTop + delta;
 }
 
 async function archiveDay(dayKey) {

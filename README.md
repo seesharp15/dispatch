@@ -37,3 +37,4 @@ A transcription service for live dispatch audio feeds
 - Recording list scroll position now anchors to the visible item during refreshes so updates don’t jump your view.
 - Recording-day scroll state now persists across refreshes without clearing the container, preventing jumps mid-list.
 - Recording rows no longer show a separate duration stamp; the audio control already conveys length.
+- Per-day recording lists now maintain their own scroll anchors during refreshes (since those lists handle scrolling, not the parent pane).
