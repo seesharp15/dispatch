@@ -802,7 +802,9 @@ function updateRecordingNode(node, rec) {
   const start = new Date(rec.startUtc);
   node.time.textContent = start.toLocaleString();
   node.duration.textContent = `${rec.durationSeconds.toFixed(1)}s`;
-  node.badge.textContent = rec.transcriptStatus;
+  const showStatus = rec.transcriptStatus !== "Complete";
+  node.badge.textContent = showStatus ? rec.transcriptStatus : "";
+  node.badge.hidden = !showStatus;
   node.root.classList.toggle("archived", rec.isArchived);
   node.archivedFlag.hidden = !rec.isArchived;
   node.archiveToggle.disabled = rec.isArchived;
