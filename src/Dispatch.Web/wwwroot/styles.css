@@ -490,9 +490,9 @@ button,
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 12px;
+  padding: 10px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .recording-header {
@@ -502,14 +502,22 @@ button,
   gap: 12px;
 }
 
+.recording-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .recording-time {
   margin: 0;
   font-weight: 600;
+  font-size: 0.85rem;
 }
 
 .recording-duration {
-  margin: 4px 0 0;
-  font-size: 0.8rem;
+  margin: 0;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
@@ -517,6 +525,13 @@ button,
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.recording-status .transcript-toggle {
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  border-radius: 999px;
+  white-space: nowrap;
 }
 
 .badge {
@@ -542,6 +557,15 @@ button,
   overflow: hidden;
 }
 
+.recording-audio-row {
+  display: flex;
+  align-items: center;
+}
+
+.recording-audio {
+  width: 100%;
+}
+
 .progress-fill {
   height: 100%;
   width: 0%;
@@ -552,7 +576,7 @@ button,
 .recording-text {
   margin: 0;
   font-family: "IBM Plex Mono", monospace;
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.04);
   padding: 8px 10px;

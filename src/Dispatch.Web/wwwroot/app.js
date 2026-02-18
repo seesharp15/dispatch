@@ -493,8 +493,20 @@ function getRecordingNode(recording) {
       progressText: fragment.querySelector(".progress-text"),
       progressFill: fragment.querySelector(".progress-fill"),
       audio: fragment.querySelector(".recording-audio"),
-      text: fragment.querySelector(".recording-text")
+      text: fragment.querySelector(".recording-text"),
+      transcriptToggle: fragment.querySelector(".transcript-toggle")
     };
+    node.transcriptToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const isHidden = node.text.hasAttribute("hidden");
+      if (isHidden) {
+        node.text.removeAttribute("hidden");
+        node.transcriptToggle.textContent = "Hide";
+      } else {
+        node.text.setAttribute("hidden", "true");
+        node.transcriptToggle.textContent = "Transcript";
+      }
+    });
     recordingNodes.set(recording.id, node);
   }
 
@@ -534,6 +546,9 @@ function updateRecordingNode(node, rec) {
 
   if (rec.transcriptText) {
     node.text.textContent = rec.transcriptText;
+    if (!node.text.hasAttribute("hidden")) {
+      node.transcriptToggle.textContent = "Hide";
+    }
   } else if (rec.transcriptStatus === "Processing") {
     node.text.textContent = "Transcribing...";
   } else if (rec.transcriptStatus === "Failed") {
@@ -542,6 +557,10 @@ function updateRecordingNode(node, rec) {
     node.text.textContent = "Transcription skipped";
   } else {
     node.text.textContent = "Transcript pending";
+  }
+
+  if (node.text.hasAttribute("hidden")) {
+    node.transcriptToggle.textContent = "Transcript";
   }
 }
 
