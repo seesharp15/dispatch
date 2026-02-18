@@ -61,15 +61,24 @@ public sealed class BroadcastifyFeedDiscoveryService : IFeedDiscoveryService
 
             var stateDisplay = stateName.Trim();
             feeds = new List<AudioFeed>(capacity: 512);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var feedRow in ParseAreawideFeeds(doc, stateDisplay))
             {
-                feeds.Add(feedRow);
+                var key = feedRow.AudioSource.ToString();
+                if (seen.Add(key))
+                {
+                    feeds.Add(feedRow);
+                }
             }
 
             foreach (var feedRow in ParseAllFeedsTable(doc, stateDisplay))
             {
-                feeds.Add(feedRow);
+                var key = feedRow.AudioSource.ToString();
+                if (seen.Add(key))
+                {
+                    feeds.Add(feedRow);
+                }
             }
 
             var cacheDays = _opt.FeedCacheDays > 0 ? _opt.FeedCacheDays : 30;
