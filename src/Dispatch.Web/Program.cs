@@ -181,6 +181,7 @@ builder.Services.AddHttpClient("stream")
 
 builder.Services.AddSingleton<BroadcastifyResolver>();
 builder.Services.AddSingleton<IRecordingEventHub, RecordingEventHub>();
+builder.Services.AddSingleton<IFeedEventHub, FeedEventHub>();
 builder.Services.AddSingleton<FeedRecorder>();
 builder.Services.AddSingleton<FeedCoordinator>();
 
@@ -335,7 +336,7 @@ app.MapPost("/api/feeds/{id:guid}/start", async (Guid id, DispatchDbContext db, 
     feed.LastStartedUtc = DateTime.UtcNow;
     await db.SaveChangesAsync(ct);
 
-    await coordinator.StartAsync(feed, ct);
+    await coordinator.StartAsync(feed, ct, feed.IsActive);
 
     return Results.Ok();
 });
@@ -352,7 +353,7 @@ app.MapPost("/api/feeds/{id:guid}/stop", async (Guid id, DispatchDbContext db, F
     feed.LastStoppedUtc = DateTime.UtcNow;
     await db.SaveChangesAsync(ct);
 
-    await coordinator.StopAsync(feed.Id);
+    await coordinator.StopAsync(feed.Id, feed.IsActive);
 
     return Results.Ok();
 });
@@ -608,6 +609,26 @@ app.MapGet("/api/ui-config", (IOptions<TranscriptionOptions> options) =>
         expectedRealtimeFactor = opt.ExpectedRealtimeFactor,
         estimatedBytesPerSecond = opt.EstimatedBytesPerSecond
     });
+});
+
+app.MapGet("/api/feeds/stream", async (IFeedEventHub eventHub, HttpContext context, CancellationToken ct) =>
+{
+    context.Response.Headers.CacheControl = "no-cache";
+    context.Response.Headers.Connection = "keep-alive";
+    context.Response.ContentType = "text/event-stream";
+
+    var jsonOptions = new JsonSerializerOptions
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    await foreach (var evt in eventHub.Subscribe(ct))
+    {
+        var payload = JsonSerializer.Serialize(evt, jsonOptions);
+        await context.Response.WriteAsync("event: updated\n", ct);
+        await context.Response.WriteAsync($"data: {payload}\n\n", ct);
+        await context.Response.Body.FlushAsync(ct);
+    }
 });
 
 app.MapGet("/api/recordings/stream", async (Guid feedId, IRecordingEventHub eventHub, HttpContext context, CancellationToken ct) =>

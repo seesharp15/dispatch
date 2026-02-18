@@ -46,6 +46,7 @@ let recordingsInitialized = false;
 let latestRecordingStart = null;
 let preloadToken = 0;
 let eventSource = null;
+let feedEventSource = null;
 let progressTimer = null;
 let uiConfig = {
   expectedRealtimeFactor: 0.7,
@@ -458,9 +459,11 @@ function restartAutoRefresh() {
 
   if (!refreshEnabled) {
     disconnectRecordingStream();
+    disconnectFeedStream();
     return;
   }
 
+  connectFeedStream();
   connectRecordingStream();
   progressTimer = setInterval(() => {
     updateProcessingProgress();
@@ -821,6 +824,48 @@ function disconnectRecordingStream() {
   if (eventSource) {
     eventSource.close();
     eventSource = null;
+  }
+}
+
+function connectFeedStream() {
+  disconnectFeedStream();
+
+  if (!refreshEnabled) {
+    return;
+  }
+
+  feedEventSource = new EventSource("/api/feeds/stream");
+  feedEventSource.addEventListener("updated", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (!payload || !payload.feedId) {
+        return;
+      }
+
+      const entry = activeFeedNodes.get(payload.feedId);
+      if (!entry) {
+        return;
+      }
+
+      if (typeof payload.isRunning === "boolean") {
+        entry.feed.isRunning = payload.isRunning;
+      }
+      if (payload.isActive !== undefined && payload.isActive !== null) {
+        entry.feed.isActive = payload.isActive;
+      }
+
+      updateActiveFeedCard(entry);
+      updateActiveStatusFromNodes();
+    } catch (error) {
+      console.error(error);
+    }
+  });
+}
+
+function disconnectFeedStream() {
+  if (feedEventSource) {
+    feedEventSource.close();
+    feedEventSource = null;
   }
 }
 

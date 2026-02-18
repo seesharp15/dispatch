@@ -43,3 +43,4 @@ A transcription service for live dispatch audio feeds
 - Broadcastify feed discovery now deduplicates Statewide feeds so each feed appears only once.
 - Removed the redundant “View activity” action since selecting a feed already shows its activity.
 - Feed cards now flash green briefly when a new recording arrives, even if the feed isn’t selected.
+- Feed status now updates live via server-sent events when recording starts or stops.
