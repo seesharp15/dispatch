@@ -491,7 +491,6 @@ function getRecordingNode(recording) {
       duration: fragment.querySelector(".recording-duration"),
       badge: fragment.querySelector(".badge"),
       progressText: fragment.querySelector(".progress-text"),
-      progressFill: fragment.querySelector(".progress-fill"),
       audio: fragment.querySelector(".recording-audio"),
       text: fragment.querySelector(".recording-text"),
       transcriptToggle: fragment.querySelector(".transcript-toggle")
@@ -523,20 +522,16 @@ function updateRecordingNode(node, rec) {
   const percent = Math.round(rec.transcriptProgress || 0);
   if (rec.transcriptStatus === "Processing") {
     node.progressText.textContent = `${percent}%`;
-    node.progressFill.style.width = `${Math.min(percent, 100)}%`;
   } else if (rec.transcriptStatus === "Pending") {
     if (rec.transcriptQueuePosition) {
       node.progressText.textContent = `Queue #${rec.transcriptQueuePosition}`;
     } else {
       node.progressText.textContent = "Queued";
     }
-    node.progressFill.style.width = "0%";
   } else if (rec.transcriptStatus === "Complete" || rec.transcriptStatus === "Skipped") {
-    node.progressText.textContent = "100%";
-    node.progressFill.style.width = "100%";
+    node.progressText.textContent = "";
   } else {
     node.progressText.textContent = percent ? `${percent}%` : "";
-    node.progressFill.style.width = `${Math.min(percent, 100)}%`;
   }
 
   if (node.audio.dataset.recordingId !== rec.id) {

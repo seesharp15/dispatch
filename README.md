@@ -15,3 +15,4 @@ A transcription service for live dispatch audio feeds
 - Scrollable list containers now cap at viewport height with overflow scrolling.
 - Collapsed recording day groups now shrink to header height instead of filling available space.
 - Recording entries are more compact and transcripts can be expanded or collapsed per item.
+- Recording rows are now single-line with inline audio, right-aligned transcript toggle, and no 100% indicator for completed items.

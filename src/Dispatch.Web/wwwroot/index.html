@@ -152,22 +152,19 @@
 
     <template id="recording-template">
       <div class="recording">
-        <div class="recording-header">
+        <div class="recording-row">
           <div class="recording-meta">
-            <p class="recording-time"></p>
-            <p class="recording-duration"></p>
+            <span class="recording-time"></span>
+            <span class="recording-duration"></span>
           </div>
           <div class="recording-status">
             <span class="badge"></span>
             <span class="progress-text"></span>
-            <button class="ghost transcript-toggle" type="button">Transcript</button>
           </div>
-        </div>
-        <div class="progress">
-          <div class="progress-fill"></div>
-        </div>
-        <div class="recording-audio-row">
-          <audio controls class="recording-audio"></audio>
+          <div class="recording-audio-row">
+            <audio controls class="recording-audio"></audio>
+          </div>
+          <button class="ghost transcript-toggle" type="button">Transcript</button>
         </div>
         <pre class="recording-text" hidden></pre>
       </div>
