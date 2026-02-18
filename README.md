@@ -8,3 +8,4 @@ A transcription service for live dispatch audio feeds
 - Redesigned the web UI to mirror the WEBB-style three-pane layout with feed discovery tree, drag-and-drop activation, and recordings grouped by day in the right pane.
 - Feed activity pane now allows full scroll through overflowed recordings.
 - Stopped feeds now remain visible in the active list so they can be restarted.
+- Right-hand recordings pane now flexes and scrolls correctly within the viewport layout.

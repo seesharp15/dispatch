@@ -28,6 +28,11 @@ body {
   font-family: "Space Grotesk", sans-serif;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -93,6 +98,8 @@ body {
   grid-template-columns: 1.1fr 2fr 1.4fr;
   gap: 20px;
   padding: 20px;
+  flex: 1;
+  min-height: 0;
 }
 
 .panel {
@@ -107,12 +114,12 @@ body {
 
 .sidebar,
 .insights {
-  max-height: calc(100vh - 110px);
+  height: 100%;
   overflow: hidden;
 }
 
 .canvas {
-  max-height: calc(100vh - 110px);
+  height: 100%;
   overflow: hidden;
 }
 
@@ -458,11 +465,13 @@ button,
 @media (max-width: 1200px) {
   .workspace {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .sidebar,
   .canvas,
   .insights {
     max-height: none;
+    height: auto;
   }
 }
