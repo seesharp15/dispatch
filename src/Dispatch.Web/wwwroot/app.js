@@ -24,6 +24,7 @@ const recordingDayTemplate = document.getElementById("recording-day-template");
 
 const DEFAULT_REFRESH_SECONDS = 8;
 const NEW_RECORDING_WINDOW_SECONDS = 10;
+const PRELOAD_CONCURRENCY = 4;
 const STORAGE_KEYS = {
   autoRefresh: "dispatch.autoRefreshEnabled",
   refreshSeconds: "dispatch.refreshIntervalSeconds",
@@ -42,6 +43,7 @@ let showArchived = false;
 let contextMenu = null;
 let contextRecordingId = null;
 let recordingsInitialized = false;
+let preloadToken = 0;
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
@@ -56,6 +58,8 @@ async function fetchJson(url, options) {
 async function loadStates() {
   treeContainer.innerHTML = "";
   stateStore.clear();
+  preloadToken += 1;
+  const currentToken = preloadToken;
 
   const states = await fetchJson("/api/discovery/states");
   states.forEach((stateName) => {
@@ -96,6 +100,8 @@ async function loadStates() {
     treeContainer.appendChild(node);
     treeContainer.appendChild(children);
   });
+
+  preloadStates(currentToken).catch((err) => console.error(err));
 }
 
 async function toggleState(stateEntry) {
@@ -103,6 +109,7 @@ async function toggleState(stateEntry) {
     await loadStateFeeds(stateEntry);
   }
 
+  stateEntry.expanded = !stateEntry.children.hidden;
   stateEntry.expanded = !stateEntry.expanded;
   stateEntry.children.hidden = !stateEntry.expanded;
   stateEntry.toggle.textContent = stateEntry.expanded ? "▾" : "▸";
@@ -212,13 +219,44 @@ async function loadStateFeeds(stateEntry) {
 
   stateEntry.loaded = true;
   stateEntry.count.textContent = `${feeds.length}`;
-  stateEntry.expanded = true;
-  stateEntry.children.hidden = false;
-  stateEntry.toggle.textContent = "▾";
+  const isExpanded = !stateEntry.children.hidden;
+  stateEntry.expanded = isExpanded;
+  stateEntry.toggle.textContent = isExpanded ? "▾" : "▸";
   applySearchFilter();
 }
 
+async function preloadStates(token) {
+  const entries = Array.from(stateStore.values());
+  if (entries.length === 0) {
+    return;
+  }
+
+  const queue = entries.slice();
+  const workerCount = Math.min(PRELOAD_CONCURRENCY, queue.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (queue.length > 0) {
+      if (token !== preloadToken) {
+        return;
+      }
+
+      const entry = queue.shift();
+      if (!entry || entry.loaded) {
+        continue;
+      }
+
+      try {
+        await loadStateFeeds(entry);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  });
+
+  await Promise.all(workers);
+}
+
 function toggleCounty(countyEntry) {
+  countyEntry.expanded = !countyEntry.children.hidden;
   countyEntry.expanded = !countyEntry.expanded;
   countyEntry.children.hidden = !countyEntry.expanded;
   countyEntry.toggle.textContent = countyEntry.expanded ? "▾" : "▸";

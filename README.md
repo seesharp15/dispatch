@@ -32,3 +32,4 @@ A transcription service for live dispatch audio feeds
 - Status badges now color-code Live/Processing as green, Pending as orange, and Paused/Failed in red.
 - Queue indicators now show position and total size as `Queue: (position/total)`.
 - Recording status/queue indicators now sit after the audio player, and transcript toggles only appear once a transcript is complete.
+- Feed discovery now preloads all state feeds into the left tree (cached server-side), so search works across the full list without manually expanding states.
