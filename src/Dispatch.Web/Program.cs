@@ -407,6 +407,51 @@ app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IO
         recording.TranscriptProvider));
 });
 
+app.MapPost("/api/recordings/{id:guid}/reprocess", async (Guid id, DispatchDbContext db, CancellationToken ct) =>
+{
+    var recording = await db.Recordings.FirstOrDefaultAsync(r => r.Id == id, ct);
+    if (recording == null)
+    {
+        return Results.NotFound();
+    }
+
+    if (!string.IsNullOrWhiteSpace(recording.TranscriptPath) && File.Exists(recording.TranscriptPath))
+    {
+        try
+        {
+            File.Delete(recording.TranscriptPath);
+        }
+        catch
+        {
+            // Ignore delete failures; reprocess will overwrite
+        }
+    }
+
+    var fallbackTranscript = recording.FilePath + ".txt";
+    if (File.Exists(fallbackTranscript))
+    {
+        try
+        {
+            File.Delete(fallbackTranscript);
+        }
+        catch
+        {
+            // Ignore delete failures
+        }
+    }
+
+    recording.TranscriptStatus = TranscriptStatus.Pending;
+    recording.TranscriptStartedUtc = null;
+    recording.TranscribedUtc = null;
+    recording.TranscriptText = null;
+    recording.TranscriptPath = null;
+    recording.TranscriptProvider = null;
+    recording.Error = null;
+
+    await db.SaveChangesAsync(ct);
+    return Results.Ok();
+});
+
 app.MapGet("/api/stream", async (string url, BroadcastifyResolver resolver, IHttpClientFactory httpClientFactory, HttpContext context, CancellationToken ct) =>
 {
     if (!resolver.TryResolve(url, out _, out var streamUrl))

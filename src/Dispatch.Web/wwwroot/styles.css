@@ -481,9 +481,6 @@ button,
   display: grid;
   gap: 12px;
   padding: 12px;
-  /* overflow: auto;
-  height: 100%;
-  max-height:100%; */
 }
 
 .recording {
@@ -554,6 +551,10 @@ button,
   color: var(--muted);
 }
 
+.progress-text:empty {
+  display: none;
+}
+
 .recording-audio-row {
   display: flex;
   align-items: center;
@@ -576,6 +577,34 @@ button,
   padding: 8px 10px;
   border-radius: 10px;
   white-space: pre-wrap;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 9999;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  min-width: 180px;
+  box-shadow: var(--shadow);
+}
+
+.context-menu-item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.context-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 @media (max-width: 1200px) {

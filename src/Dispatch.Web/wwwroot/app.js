@@ -34,6 +34,8 @@ let selectedFeedId = null;
 let refreshTimer = null;
 let refreshEnabled = true;
 let refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
+let contextMenu = null;
+let contextRecordingId = null;
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
@@ -242,6 +244,66 @@ function applySearchFilter() {
       stateEntry.toggle.textContent = "▾";
     }
   });
+}
+
+function setupContextMenu() {
+  contextMenu = document.createElement("div");
+  contextMenu.className = "context-menu";
+  contextMenu.innerHTML = "<button type=\"button\" class=\"context-menu-item\">Reprocess transcript</button>";
+  contextMenu.hidden = true;
+  document.body.appendChild(contextMenu);
+
+  contextMenu.addEventListener("click", async (event) => {
+    const item = event.target.closest(".context-menu-item");
+    if (!item) {
+      return;
+    }
+
+    const recordingId = contextRecordingId;
+    hideContextMenu();
+    if (!recordingId) {
+      return;
+    }
+
+    try {
+      await fetchJson(`/api/recordings/${recordingId}/reprocess`, { method: "POST" });
+      await loadRecordings();
+    } catch (error) {
+      console.error(error);
+    }
+  });
+
+  document.addEventListener("click", hideContextMenu);
+  window.addEventListener("scroll", hideContextMenu, true);
+  window.addEventListener("resize", hideContextMenu);
+}
+
+function showContextMenu(x, y, recordingId) {
+  if (!contextMenu) {
+    return;
+  }
+
+  contextRecordingId = recordingId;
+  contextMenu.hidden = false;
+  contextMenu.style.left = `${x}px`;
+  contextMenu.style.top = `${y}px`;
+
+  requestAnimationFrame(() => {
+    const rect = contextMenu.getBoundingClientRect();
+    const maxX = window.innerWidth - rect.width - 8;
+    const maxY = window.innerHeight - rect.height - 8;
+    contextMenu.style.left = `${Math.max(8, Math.min(x, maxX))}px`;
+    contextMenu.style.top = `${Math.max(8, Math.min(y, maxY))}px`;
+  });
+}
+
+function hideContextMenu() {
+  if (!contextMenu) {
+    return;
+  }
+
+  contextMenu.hidden = true;
+  contextRecordingId = null;
 }
 
 async function loadActiveFeeds() {
@@ -506,6 +568,12 @@ function getRecordingNode(recording) {
         node.transcriptToggle.textContent = "Transcript";
       }
     });
+    node.root.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      if (node.recordingId) {
+        showContextMenu(event.clientX, event.clientY, node.recordingId);
+      }
+    });
     recordingNodes.set(recording.id, node);
   }
 
@@ -514,6 +582,7 @@ function getRecordingNode(recording) {
 }
 
 function updateRecordingNode(node, rec) {
+  node.recordingId = rec.id;
   const start = new Date(rec.startUtc);
   node.time.textContent = start.toLocaleString();
   node.duration.textContent = `${rec.durationSeconds.toFixed(1)}s`;
@@ -627,6 +696,7 @@ autoRefreshToggle.addEventListener("change", applyRefreshSettings);
 refreshIntervalInput.addEventListener("change", applyRefreshSettings);
 refreshIntervalInput.addEventListener("blur", applyRefreshSettings);
 
+setupContextMenu();
 setupDragAndDrop();
 loadStates().catch((err) => console.error(err));
 loadActiveFeeds().catch((err) => console.error(err));
