@@ -35,3 +35,4 @@ A transcription service for live dispatch audio feeds
 - Feed discovery now preloads all state feeds into the left tree (cached server-side), so search works across the full list without manually expanding states.
 - Start buttons now render in neutral gray while Stop remains red for clearer at-a-glance status.
 - Recording list scroll position now anchors to the visible item during refreshes so updates don’t jump your view.
+- Recording-day scroll state now persists across refreshes without clearing the container, preventing jumps mid-list.

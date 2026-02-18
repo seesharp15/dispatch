@@ -729,27 +729,27 @@ function renderRecordings(recordings) {
     }
   }
 
-  const fragment = document.createDocumentFragment();
   orderedKeys.forEach((key) => {
     const entry = recordingDayNodes.get(key);
     if (entry) {
-      fragment.appendChild(entry.root);
+      recordingsContainer.appendChild(entry.root);
     }
   });
-  recordingsContainer.innerHTML = "";
-  recordingsContainer.appendChild(fragment);
 
   recordingsInitialized = true;
 
   if (scrollState) {
-    requestAnimationFrame(() => restoreRecordingsScrollState(scrollState));
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => restoreRecordingsScrollState(scrollState));
+    });
   }
 }
 
 function captureRecordingsScrollState() {
   const scrollTop = recordingsContainer.scrollTop;
-  if (scrollTop <= 0) {
-    return null;
+  const canScroll = recordingsContainer.scrollHeight > recordingsContainer.clientHeight;
+  if (!canScroll || scrollTop <= 0) {
+    return scrollTop > 0 ? { scrollTop, anchorId: null, anchorOffset: 0 } : null;
   }
 
   const containerRect = recordingsContainer.getBoundingClientRect();
