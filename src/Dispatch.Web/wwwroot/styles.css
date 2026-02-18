@@ -450,7 +450,8 @@ button,
 .recording-day {
   border: 1px solid var(--border);
   border-radius: 12px;
-  overflow: hidden;
+  overflow: auto;
+    min-height: 35px;
   background: rgba(255, 255, 255, 0.02);
 }
 
@@ -464,6 +465,7 @@ button,
   padding: 10px 12px;
   color: var(--text);
   font-family: inherit;
+
   cursor: pointer;
 }
 
