@@ -645,7 +645,7 @@ app.MapGet("/api/feeds/stream", async (IFeedEventHub eventHub, DispatchDbContext
     }
 });
 
-app.MapGet("/api/recordings/stream", async (Guid feedId, IRecordingEventHub eventHub, HttpContext context, CancellationToken ct) =>
+app.MapGet("/api/recordings/stream", async (Guid feedId, DispatchDbContext db, IRecordingEventHub eventHub, HttpContext context, CancellationToken ct) =>
 {
     context.Response.Headers.CacheControl = "no-cache";
     context.Response.Headers.Connection = "keep-alive";
@@ -655,6 +655,16 @@ app.MapGet("/api/recordings/stream", async (Guid feedId, IRecordingEventHub even
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
+
+    var pendingIds = await db.Recordings.AsNoTracking()
+        .Where(r => r.FeedId == feedId &&
+                    (r.TranscriptStatus == TranscriptStatus.Pending || r.TranscriptStatus == TranscriptStatus.Processing))
+        .Select(r => r.Id)
+        .ToListAsync(ct);
+    var snapshotPayload = JsonSerializer.Serialize(new { recordingIds = pendingIds }, jsonOptions);
+    await context.Response.WriteAsync("event: snapshot\n", ct);
+    await context.Response.WriteAsync($"data: {snapshotPayload}\n\n", ct);
+    await context.Response.Body.FlushAsync(ct);
 
     await foreach (var evt in eventHub.Subscribe(ct))
     {

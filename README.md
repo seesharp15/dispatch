@@ -46,3 +46,4 @@ A transcription service for live dispatch audio feeds
 - Feed status now updates live via server-sent events when recording starts or stops.
 - Feed status streaming now sends an initial snapshot so the UI reflects current running feeds without a manual refresh.
 - Recording stream matching now normalizes feed IDs and reconnects on errors to keep new items flowing without manual refresh.
+- Recording streams now send a snapshot of in-flight items and refresh queue/processing states on each event.

@@ -751,6 +751,14 @@ async function refreshRecordingStatuses() {
     return;
   }
 
+  await refreshRecordingStatusesByIds(ids);
+}
+
+async function refreshRecordingStatusesByIds(ids) {
+  if (!ids || ids.length === 0) {
+    return;
+  }
+
   const response = await fetchJson("/api/recordings/batch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -812,10 +820,26 @@ function connectRecordingStream() {
       if (type === "created") {
         flashFeedCard(recording.feedId);
       }
+
+      if (type === "created" || type === "updated") {
+        await refreshRecordingStatuses();
+      }
     } catch (error) {
       console.error(error);
     }
   };
+
+  eventSource.addEventListener("snapshot", async (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      const ids = Array.isArray(payload?.recordingIds) ? payload.recordingIds : [];
+      if (ids.length > 0) {
+        await refreshRecordingStatusesByIds(ids);
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  });
 
   eventSource.addEventListener("created", handleEvent("created"));
   eventSource.addEventListener("updated", handleEvent("updated"));
