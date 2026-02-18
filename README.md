@@ -23,3 +23,4 @@ A transcription service for live dispatch audio feeds
 - Active feeds now include a remove (X) control to drop a stream from the list.
 - UI corner radii have been tightened to a subtle, near-square look across controls and panels.
 - Newly added recordings now flash green briefly to highlight recent arrivals.
+- API timestamps are now marked as UTC so the UI renders them in local time.

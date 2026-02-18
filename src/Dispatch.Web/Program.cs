@@ -74,6 +74,13 @@ double EstimateDurationFromFileSize(long? fileSizeBytes, TranscriptionOptions op
     return audioBytes / (double)bytesPerSecond;
 }
 
+DateTime AsUtc(DateTime value)
+{
+    return value.Kind == DateTimeKind.Utc
+        ? value
+        : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+}
+
 long? GetRecordingFileSize(Recording recording, IWebHostEnvironment env)
 {
     if (string.IsNullOrWhiteSpace(recording.FilePath))
@@ -261,9 +268,9 @@ app.MapGet("/api/feeds", async (DispatchDbContext db, FeedCoordinator coordinato
         feed.FeedIdentifier,
         feed.IsActive,
         coordinator.IsRunning(feed.Id),
-        feed.CreatedUtc,
-        feed.LastStartedUtc,
-        feed.LastStoppedUtc));
+        AsUtc(feed.CreatedUtc),
+        feed.LastStartedUtc.HasValue ? AsUtc(feed.LastStartedUtc.Value) : null,
+        feed.LastStoppedUtc.HasValue ? AsUtc(feed.LastStoppedUtc.Value) : null));
 
     return Results.Ok(response);
 });
@@ -351,8 +358,8 @@ app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, DispatchDbContext 
         r.Id,
         r.FeedId,
         r.FilePath,
-        r.StartUtc,
-        r.EndUtc,
+        AsUtc(r.StartUtc),
+        AsUtc(r.EndUtc),
         r.DurationSeconds,
         r.TranscriptStatus,
         ComputeTranscriptProgress(r, options.Value, GetRecordingFileSize(r, env)),
@@ -396,8 +403,8 @@ app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IO
         recording.Id,
         recording.FeedId,
         recording.FilePath,
-        recording.StartUtc,
-        recording.EndUtc,
+        AsUtc(recording.StartUtc),
+        AsUtc(recording.EndUtc),
         recording.DurationSeconds,
         recording.TranscriptStatus,
         ComputeTranscriptProgress(recording, options.Value, GetRecordingFileSize(recording, env)),
