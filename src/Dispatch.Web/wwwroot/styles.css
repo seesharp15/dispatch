@@ -615,6 +615,28 @@ button,
   font-size: 0.7rem;
 }
 
+.badge.badge-live,
+.badge.badge-processing {
+  background: rgba(59, 162, 114, 0.18);
+  color: var(--success);
+}
+
+.badge.badge-pending {
+  background: rgba(240, 179, 109, 0.18);
+  color: var(--accent-2);
+}
+
+.badge.badge-paused,
+.badge.badge-failed {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.badge.badge-skipped {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
 .progress-text {
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.7rem;

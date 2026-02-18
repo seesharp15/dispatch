@@ -540,6 +540,8 @@ function updateActiveFeedCard(entry) {
   entry.title.textContent = feed.name;
   entry.meta.textContent = `Feed ID ${feed.feedIdentifier}`;
   entry.badge.textContent = feed.isRunning ? "Live" : "Paused";
+  entry.badge.classList.remove("badge-live", "badge-paused");
+  entry.badge.classList.add(feed.isRunning ? "badge-live" : "badge-paused");
   entry.toggle.textContent = feed.isRunning ? "Stop" : "Start";
   entry.card.classList.toggle("selected", feed.id === selectedFeedId);
 }
@@ -805,6 +807,18 @@ function updateRecordingNode(node, rec) {
   const showStatus = rec.transcriptStatus !== "Complete";
   node.badge.textContent = showStatus ? rec.transcriptStatus : "";
   node.badge.hidden = !showStatus;
+  node.badge.classList.remove("badge-processing", "badge-pending", "badge-failed", "badge-skipped");
+  if (showStatus) {
+    if (rec.transcriptStatus === "Processing") {
+      node.badge.classList.add("badge-processing");
+    } else if (rec.transcriptStatus === "Pending") {
+      node.badge.classList.add("badge-pending");
+    } else if (rec.transcriptStatus === "Failed") {
+      node.badge.classList.add("badge-failed");
+    } else if (rec.transcriptStatus === "Skipped") {
+      node.badge.classList.add("badge-skipped");
+    }
+  }
   node.root.classList.toggle("archived", rec.isArchived);
   node.archivedFlag.hidden = !rec.isArchived;
   node.archiveToggle.disabled = rec.isArchived;
