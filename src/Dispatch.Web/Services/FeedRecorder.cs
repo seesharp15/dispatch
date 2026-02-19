@@ -170,6 +170,8 @@ public class FeedRecorder
 
     private Process StartFfmpeg(string streamUrl)
     {
+        var isLocalSource = LocalFeedUri.TryParse(streamUrl, out var localBackend, out var localInput);
+
         var psi = new ProcessStartInfo
         {
             FileName = _decoderOptions.FfmpegPath,
@@ -182,7 +184,7 @@ public class FeedRecorder
         psi.ArgumentList.Add("-loglevel");
         psi.ArgumentList.Add("error");
 
-        if (_decoderOptions.EnableReconnect)
+        if (!isLocalSource && _decoderOptions.EnableReconnect)
         {
             psi.ArgumentList.Add("-reconnect");
             psi.ArgumentList.Add("1");
@@ -192,8 +194,30 @@ public class FeedRecorder
             psi.ArgumentList.Add(_decoderOptions.ReconnectDelaySeconds.ToString());
         }
 
-        psi.ArgumentList.Add("-i");
-        psi.ArgumentList.Add(streamUrl);
+        if (isLocalSource)
+        {
+            var format = localBackend.ToLowerInvariant();
+            switch (format)
+            {
+                case "avfoundation":
+                case "dshow":
+                case "pulse":
+                case "alsa":
+                    psi.ArgumentList.Add("-f");
+                    psi.ArgumentList.Add(format);
+                    psi.ArgumentList.Add("-i");
+                    psi.ArgumentList.Add(localInput);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unsupported local capture backend '{localBackend}'.");
+            }
+        }
+        else
+        {
+            psi.ArgumentList.Add("-i");
+            psi.ArgumentList.Add(streamUrl);
+        }
+
         psi.ArgumentList.Add("-ac");
         psi.ArgumentList.Add(_decoderOptions.Channels.ToString());
         psi.ArgumentList.Add("-ar");

@@ -90,13 +90,15 @@ public class TranscriptionWorker : BackgroundService
             var result = await _transcriber.TranscribeAsync(recording.FilePath, cancellationToken);
             if (result == null)
             {
-            recording.TranscriptStatus = TranscriptStatus.Skipped;
-            recording.TranscriptProvider = null;
-            recording.TranscriptStartedUtc ??= DateTime.UtcNow;
-            recording.TranscribedUtc = DateTime.UtcNow;
-            await db.SaveChangesAsync(cancellationToken);
-            return;
-        }
+                recording.TranscriptStatus = TranscriptStatus.Skipped;
+                recording.TranscriptProvider = null;
+                recording.TranscriptStartedUtc ??= DateTime.UtcNow;
+                recording.TranscribedUtc = DateTime.UtcNow;
+                recording.Error = null;
+                await db.SaveChangesAsync(cancellationToken);
+                await _eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Updated));
+                return;
+            }
 
             var transcriptPath = recording.FilePath + ".txt";
             await File.WriteAllTextAsync(transcriptPath, result.Text, cancellationToken);

@@ -19,6 +19,8 @@ public class Feed
     [MaxLength(64)]
     public string FeedIdentifier { get; set; } = string.Empty;
 
+    public bool IsVisible { get; set; } = true;
+
     public bool IsActive { get; set; }
 
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;

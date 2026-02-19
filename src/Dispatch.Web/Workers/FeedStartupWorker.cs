@@ -23,7 +23,7 @@ public class FeedStartupWorker : BackgroundService
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<DispatchDbContext>();
-            var feeds = await db.Feeds.Where(f => f.IsActive).ToListAsync(stoppingToken);
+            var feeds = await db.Feeds.Where(f => f.IsActive && f.IsVisible).ToListAsync(stoppingToken);
 
             await _coordinator.StartActiveFeedsAsync(feeds, stoppingToken);
         }

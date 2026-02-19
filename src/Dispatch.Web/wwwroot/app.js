@@ -1,5 +1,6 @@
 const treeContainer = document.getElementById("feed-tree");
 const refreshStatesButton = document.getElementById("refresh-states");
+const addLocalFeedButton = document.getElementById("add-local-feed");
 const searchInput = document.getElementById("feed-search");
 const activeFeedsContainer = document.getElementById("active-feeds");
 const activeStatus = document.getElementById("active-status");
@@ -14,6 +15,21 @@ const navLinks = document.querySelectorAll(".nav-link");
 const autoRefreshToggle = document.getElementById("auto-refresh-toggle");
 const refreshIntervalInput = document.getElementById("refresh-interval");
 const refreshIntervalValue = document.getElementById("refresh-interval-value");
+const localFeedModal = document.getElementById("local-feed-modal");
+const localDeviceSelect = document.getElementById("local-device-select");
+const localFeedNameInput = document.getElementById("local-feed-name");
+const localFeedAutoStart = document.getElementById("local-feed-autostart");
+const localFeedCancelButton = document.getElementById("local-feed-cancel");
+const localFeedSubmitButton = document.getElementById("local-feed-submit");
+const localFeedNote = document.getElementById("local-feed-note");
+const synthesisModal = document.getElementById("synthesis-modal");
+const synthesisTitle = document.getElementById("synthesis-title");
+const synthesisMeta = document.getElementById("synthesis-meta");
+const synthesisSummary = document.getElementById("synthesis-summary");
+const synthesisThemes = document.getElementById("synthesis-themes");
+const synthesisCategories = document.getElementById("synthesis-categories");
+const synthesisHighlights = document.getElementById("synthesis-highlights");
+const synthesisCloseButton = document.getElementById("synthesis-close");
 
 const treeStateTemplate = document.getElementById("tree-state-template");
 const treeCountyTemplate = document.getElementById("tree-county-template");
@@ -22,12 +38,14 @@ const activeFeedTemplate = document.getElementById("active-feed-template");
 const recordingTemplate = document.getElementById("recording-template");
 const recordingDayTemplate = document.getElementById("recording-day-template");
 
-const DEFAULT_REFRESH_SECONDS = 8;
+const DEFAULT_REFRESH_MS = 8000;
 const NEW_RECORDING_WINDOW_SECONDS = 10;
 const PRELOAD_CONCURRENCY = 4;
+const RECORDINGS_PER_DAY_INITIAL = 25;
 const STORAGE_KEYS = {
   autoRefresh: "dispatch.autoRefreshEnabled",
-  refreshSeconds: "dispatch.refreshIntervalSeconds",
+  refreshMs: "dispatch.refreshIntervalMs",
+  refreshSecondsLegacy: "dispatch.refreshIntervalSeconds",
   showArchived: "dispatch.showArchived"
 };
 
@@ -35,19 +53,24 @@ const stateStore = new Map();
 const activeFeedNodes = new Map();
 const recordingNodes = new Map();
 const recordingDayNodes = new Map();
+const recordingDayTotals = new Map();
 const feedFlashTimers = new Map();
 let selectedFeedId = null;
 let refreshEnabled = true;
-let refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
+let refreshIntervalMs = DEFAULT_REFRESH_MS;
 let showArchived = false;
 let contextMenu = null;
 let contextRecordingId = null;
 let recordingsInitialized = false;
 let latestRecordingStart = null;
+let oldestRecordingStart = null;
+let canLoadOlderRecordings = false;
+let recordingsPageLoading = false;
 let preloadToken = 0;
 let eventSource = null;
 let feedEventSource = null;
 let progressTimer = null;
+let streamSyncInFlight = false;
 let uiConfig = {
   expectedRealtimeFactor: 0.7,
   estimatedBytesPerSecond: 32000
@@ -55,12 +78,281 @@ let uiConfig = {
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
+  const bodyText = await response.text();
+  let parsedBody = null;
+  if (bodyText) {
+    try {
+      parsedBody = JSON.parse(bodyText);
+    } catch {
+      parsedBody = null;
+    }
+  }
+
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const message = body.message || `Request failed (${response.status})`;
+    const message =
+      (parsedBody && typeof parsedBody === "object" && parsedBody.message) ||
+      bodyText ||
+      `Request failed (${response.status})`;
     throw new Error(message);
   }
-  return response.json();
+
+  if (!bodyText) {
+    return null;
+  }
+
+  return parsedBody ?? bodyText;
+}
+
+function toFeedKey(feedId) {
+  if (!feedId) {
+    return "";
+  }
+
+  return String(feedId).toLowerCase();
+}
+
+function setLocalFeedModalOpen(isOpen) {
+  if (!localFeedModal) {
+    return;
+  }
+
+  localFeedModal.hidden = !isOpen;
+}
+
+function populateLocalAudioDevices(devices) {
+  if (!localDeviceSelect || !localFeedSubmitButton || !localFeedNote) {
+    return;
+  }
+
+  localDeviceSelect.innerHTML = "";
+  if (!devices || devices.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No local audio devices detected";
+    localDeviceSelect.appendChild(option);
+    localDeviceSelect.disabled = true;
+    localFeedSubmitButton.disabled = true;
+    localFeedNote.textContent = "Connect or enable an input/loopback device, then try again.";
+    return;
+  }
+
+  const sortedDevices = [...devices].sort((a, b) => {
+    const aKind = String(a.captureKind || "");
+    const bKind = String(b.captureKind || "");
+    if (aKind !== bKind) {
+      return aKind.localeCompare(bKind);
+    }
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+
+  sortedDevices.forEach((device) => {
+    const option = document.createElement("option");
+    option.value = device.id;
+    option.textContent = `${device.name} (${device.captureKind} • ${device.backend})`;
+    localDeviceSelect.appendChild(option);
+  });
+
+  localDeviceSelect.disabled = false;
+  localFeedSubmitButton.disabled = false;
+  localFeedNote.textContent = "";
+}
+
+async function openLocalFeedModal() {
+  if (!localFeedModal || !localDeviceSelect || !localFeedSubmitButton || !localFeedNote) {
+    return;
+  }
+
+  setLocalFeedModalOpen(true);
+  if (localFeedNameInput) {
+    localFeedNameInput.value = "";
+  }
+  if (localFeedAutoStart) {
+    localFeedAutoStart.checked = true;
+  }
+
+  localDeviceSelect.innerHTML = "";
+  localDeviceSelect.disabled = true;
+  localFeedSubmitButton.disabled = true;
+  localFeedNote.textContent = "Loading local audio devices...";
+
+  try {
+    const devices = await fetchJson("/api/local-audio/devices");
+    populateLocalAudioDevices(Array.isArray(devices) ? devices : []);
+  } catch (error) {
+    console.error(error);
+    localFeedNote.textContent = error?.message || "Failed to load local devices.";
+  }
+}
+
+function closeLocalFeedModal() {
+  setLocalFeedModalOpen(false);
+  if (localFeedCancelButton) {
+    localFeedCancelButton.disabled = false;
+  }
+  if (localFeedSubmitButton) {
+    localFeedSubmitButton.disabled = false;
+  }
+}
+
+function setSynthesisModalOpen(isOpen) {
+  if (!synthesisModal) {
+    return;
+  }
+
+  synthesisModal.hidden = !isOpen;
+}
+
+function closeSynthesisModal() {
+  setSynthesisModalOpen(false);
+}
+
+function renderSynthesisResult(result) {
+  if (!result || !synthesisTitle || !synthesisMeta || !synthesisSummary || !synthesisThemes || !synthesisCategories || !synthesisHighlights) {
+    return;
+  }
+
+  const dayLabel = result.day || "";
+  const feedName = result.feedName || "Selected feed";
+  synthesisTitle.textContent = `${feedName} • ${dayLabel}`;
+  synthesisMeta.textContent = `${result.transcribedCalls || 0} transcribed / ${result.totalCalls || 0} total calls`;
+  synthesisSummary.textContent = result.summary || "No synthesis output available.";
+
+  synthesisThemes.innerHTML = "";
+  const themes = Array.isArray(result.keyThemes) ? result.keyThemes : [];
+  themes.forEach((theme) => {
+    const chip = document.createElement("span");
+    chip.className = "synthesis-theme";
+    chip.textContent = String(theme);
+    synthesisThemes.appendChild(chip);
+  });
+
+  synthesisCategories.innerHTML = "";
+  const categories = Array.isArray(result.categories) ? result.categories : [];
+  categories.forEach((category) => {
+    const item = document.createElement("li");
+    item.textContent = `${category.category}: ${category.count}`;
+    synthesisCategories.appendChild(item);
+  });
+
+  synthesisHighlights.innerHTML = "";
+  const highlights = Array.isArray(result.highlights) ? result.highlights : [];
+  if (highlights.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No notable highlights were extracted for this day.";
+    synthesisHighlights.appendChild(empty);
+    return;
+  }
+
+  highlights.forEach((highlight) => {
+    const card = document.createElement("article");
+    card.className = "synthesis-highlight";
+
+    const header = document.createElement("div");
+    header.className = "synthesis-highlight-header";
+
+    const time = document.createElement("span");
+    time.className = "synthesis-highlight-time";
+    const highlightDate = new Date(highlight.startUtc);
+    time.textContent = Number.isNaN(highlightDate.getTime())
+      ? "Unknown time"
+      : highlightDate.toLocaleString();
+
+    const category = document.createElement("span");
+    category.className = "synthesis-highlight-category";
+    category.textContent = String(highlight.category || "General Dispatch");
+
+    const score = document.createElement("span");
+    score.className = "synthesis-highlight-score";
+    score.textContent = `Score ${Number(highlight.score || 0).toFixed(1)}`;
+
+    header.appendChild(time);
+    header.appendChild(category);
+    header.appendChild(score);
+    card.appendChild(header);
+
+    const excerpt = document.createElement("p");
+    excerpt.textContent = String(highlight.excerpt || "");
+    card.appendChild(excerpt);
+
+    synthesisHighlights.appendChild(card);
+  });
+}
+
+async function synthesizeDay(dayKey, dayEntry) {
+  if (!selectedFeedId) {
+    return;
+  }
+
+  const button = dayEntry?.synthesize;
+  const originalLabel = button?.textContent || "Synthesize";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Working...";
+  }
+
+  try {
+    const result = await fetchJson(
+      `/api/feeds/${selectedFeedId}/synthesis?day=${encodeURIComponent(dayKey)}&includeArchived=${showArchived}`
+    );
+    renderSynthesisResult(result);
+    setSynthesisModalOpen(true);
+  } catch (error) {
+    console.error(error);
+    if (synthesisTitle && synthesisMeta && synthesisSummary && synthesisThemes && synthesisCategories && synthesisHighlights) {
+      synthesisTitle.textContent = `Synthesis failed • ${dayKey}`;
+      synthesisMeta.textContent = "";
+      synthesisSummary.textContent = error?.message || "Unable to synthesize this day right now.";
+      synthesisThemes.innerHTML = "";
+      synthesisCategories.innerHTML = "";
+      synthesisHighlights.innerHTML = "";
+      setSynthesisModalOpen(true);
+    }
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  }
+}
+
+async function submitLocalFeed() {
+  if (!localDeviceSelect || !localFeedSubmitButton || !localFeedCancelButton || !localFeedNote) {
+    return;
+  }
+
+  const deviceId = localDeviceSelect.value;
+  if (!deviceId) {
+    return;
+  }
+
+  localFeedSubmitButton.disabled = true;
+  localFeedCancelButton.disabled = true;
+  localFeedNote.textContent = "Adding source...";
+
+  try {
+    const payload = {
+      deviceId,
+      name: localFeedNameInput?.value?.trim() || null,
+      startImmediately: localFeedAutoStart?.checked !== false
+    };
+    const createdFeed = await fetchJson("/api/feeds/local", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    closeLocalFeedModal();
+    await loadActiveFeeds();
+    if (createdFeed?.id) {
+      selectFeed(createdFeed.id);
+    }
+  } catch (error) {
+    console.error(error);
+    localFeedNote.textContent = error?.message || "Failed to add local source.";
+    localFeedSubmitButton.disabled = false;
+    localFeedCancelButton.disabled = false;
+  }
 }
 
 async function loadStates() {
@@ -395,18 +687,25 @@ function showPage(page) {
 
 function loadRefreshSettings() {
   const storedEnabled = localStorage.getItem(STORAGE_KEYS.autoRefresh);
-  const storedInterval = localStorage.getItem(STORAGE_KEYS.refreshSeconds);
+  const storedIntervalMs = localStorage.getItem(STORAGE_KEYS.refreshMs);
+  const storedIntervalLegacySeconds = localStorage.getItem(STORAGE_KEYS.refreshSecondsLegacy);
 
   refreshEnabled = storedEnabled !== null ? storedEnabled === "true" : true;
-  refreshIntervalSeconds = storedInterval ? Number(storedInterval) : DEFAULT_REFRESH_SECONDS;
+  if (storedIntervalMs !== null) {
+    refreshIntervalMs = Number(storedIntervalMs);
+  } else if (storedIntervalLegacySeconds !== null) {
+    refreshIntervalMs = Number(storedIntervalLegacySeconds) * 1000;
+  } else {
+    refreshIntervalMs = DEFAULT_REFRESH_MS;
+  }
 
-  if (!Number.isFinite(refreshIntervalSeconds) || refreshIntervalSeconds < 2) {
-    refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
+  if (!Number.isFinite(refreshIntervalMs) || refreshIntervalMs < 0) {
+    refreshIntervalMs = DEFAULT_REFRESH_MS;
   }
 
   autoRefreshToggle.checked = refreshEnabled;
-  refreshIntervalInput.value = String(refreshIntervalSeconds);
-  refreshIntervalValue.textContent = `Every ${refreshIntervalSeconds} seconds`;
+  refreshIntervalInput.value = String(refreshIntervalMs);
+  refreshIntervalValue.textContent = `Every ${refreshIntervalMs} ms`;
 }
 
 async function loadUiConfig() {
@@ -439,15 +738,16 @@ function applyArchiveSettings() {
 
 function applyRefreshSettings() {
   refreshEnabled = autoRefreshToggle.checked;
-  refreshIntervalSeconds = Number(refreshIntervalInput.value);
-  if (!Number.isFinite(refreshIntervalSeconds) || refreshIntervalSeconds < 2) {
-    refreshIntervalSeconds = DEFAULT_REFRESH_SECONDS;
-    refreshIntervalInput.value = String(refreshIntervalSeconds);
+  refreshIntervalMs = Number(refreshIntervalInput.value);
+  if (!Number.isFinite(refreshIntervalMs) || refreshIntervalMs < 0) {
+    refreshIntervalMs = DEFAULT_REFRESH_MS;
+    refreshIntervalInput.value = String(refreshIntervalMs);
   }
 
   localStorage.setItem(STORAGE_KEYS.autoRefresh, String(refreshEnabled));
-  localStorage.setItem(STORAGE_KEYS.refreshSeconds, String(refreshIntervalSeconds));
-  refreshIntervalValue.textContent = `Every ${refreshIntervalSeconds} seconds`;
+  localStorage.setItem(STORAGE_KEYS.refreshMs, String(refreshIntervalMs));
+  localStorage.removeItem(STORAGE_KEYS.refreshSecondsLegacy);
+  refreshIntervalValue.textContent = `Every ${refreshIntervalMs} ms`;
   restartAutoRefresh();
 }
 
@@ -467,12 +767,16 @@ function restartAutoRefresh() {
   connectRecordingStream();
   progressTimer = setInterval(() => {
     updateProcessingProgress();
-  }, refreshIntervalSeconds * 1000);
+    syncSelectedFeedFromApi().catch((error) => console.error(error));
+  }, refreshIntervalMs);
 }
 
 function renderActiveFeeds(feeds) {
   if (feeds.length === 0) {
-    activeFeedNodes.forEach((entry) => entry.card.remove());
+    activeFeedNodes.forEach((entry) => {
+      stopFeedListen(entry);
+      entry.card.remove();
+    });
     activeFeedNodes.clear();
     activeFeedsContainer.innerHTML = "<p class=\"muted\">No active feeds yet.</p>";
     return;
@@ -482,13 +786,14 @@ function renderActiveFeeds(feeds) {
     activeFeedsContainer.innerHTML = "";
   }
 
-  const incomingIds = new Set(feeds.map((feed) => feed.id));
+  const incomingIds = new Set(feeds.map((feed) => toFeedKey(feed.id)));
 
   feeds.forEach((feed) => {
-    let entry = activeFeedNodes.get(feed.id);
+    const feedKey = toFeedKey(feed.id);
+    let entry = activeFeedNodes.get(feedKey);
     if (!entry) {
       entry = createActiveFeedCard(feed);
-      activeFeedNodes.set(feed.id, entry);
+      activeFeedNodes.set(feedKey, entry);
       activeFeedsContainer.appendChild(entry.card);
     } else {
       entry.feed = feed;
@@ -498,12 +803,13 @@ function renderActiveFeeds(feeds) {
 
   for (const [id, entry] of activeFeedNodes.entries()) {
     if (!incomingIds.has(id)) {
+      stopFeedListen(entry);
       entry.card.remove();
       activeFeedNodes.delete(id);
     }
   }
 
-  if (selectedFeedId && !incomingIds.has(selectedFeedId)) {
+  if (selectedFeedId && !incomingIds.has(toFeedKey(selectedFeedId))) {
     selectedFeedId = null;
     updateRecordingHeader(null);
     recordingsContainer.innerHTML = "";
@@ -523,38 +829,130 @@ function updateActiveStatusFromNodes() {
   updateActiveStatus(feeds);
 }
 
+function getFeedListenUrl(feedId) {
+  return `/api/feeds/${encodeURIComponent(feedId)}/listen`;
+}
+
+function updateFeedListenButton(entry) {
+  if (!entry || !entry.listenToggle) {
+    return;
+  }
+
+  const isRunning = Boolean(entry.feed?.isRunning);
+  entry.listenToggle.hidden = !isRunning;
+  if (!isRunning) {
+    entry.listenToggle.classList.remove("is-live");
+    entry.listenToggle.innerHTML = "&#128263;";
+    entry.listenToggle.title = "Unmute monitor";
+    entry.listenToggle.setAttribute("aria-label", "Unmute monitor");
+    return;
+  }
+
+  const isLive = Boolean(entry.isListening);
+  entry.listenToggle.classList.toggle("is-live", isLive);
+  entry.listenToggle.innerHTML = isLive ? "&#128266;" : "&#128263;";
+  entry.listenToggle.title = isLive ? "Mute monitor" : "Unmute monitor";
+  entry.listenToggle.setAttribute("aria-label", isLive ? "Mute monitor" : "Unmute monitor");
+}
+
+function stopFeedListen(entry) {
+  if (!entry || !entry.monitorAudio) {
+    return;
+  }
+
+  entry.isListening = false;
+  try {
+    entry.monitorAudio.pause();
+    entry.monitorAudio.removeAttribute("src");
+    entry.monitorAudio.load();
+  } catch (error) {
+    console.error(error);
+  }
+  updateFeedListenButton(entry);
+}
+
+async function startFeedListen(entry) {
+  if (!entry?.feed?.id || !entry.feed.isRunning || !entry.monitorAudio) {
+    return;
+  }
+
+  entry.isListening = true;
+  entry.monitorAudio.src = getFeedListenUrl(entry.feed.id);
+  updateFeedListenButton(entry);
+
+  try {
+    await entry.monitorAudio.play();
+  } catch (error) {
+    console.error(error);
+    stopFeedListen(entry);
+  }
+}
+
 function createActiveFeedCard(feed) {
   const fragment = activeFeedTemplate.content.cloneNode(true);
   const card = fragment.querySelector(".active-feed-card");
   const title = fragment.querySelector(".active-title");
   const meta = fragment.querySelector(".active-meta");
   const badge = fragment.querySelector(".badge");
+  const listenToggle = fragment.querySelector(".listen-toggle");
   const toggle = fragment.querySelector(".toggle");
   const remove = fragment.querySelector(".remove");
+  const monitorAudio = document.createElement("audio");
+  monitorAudio.preload = "none";
+  monitorAudio.autoplay = true;
+  monitorAudio.hidden = true;
+  card.appendChild(monitorAudio);
 
-  const entry = { feed, card, title, meta, badge, toggle, remove };
+  const entry = { feed, card, title, meta, badge, listenToggle, toggle, remove, monitorAudio, isListening: false };
+  if (listenToggle) {
+    listenToggle.type = "button";
+  }
+  toggle.type = "button";
+  remove.type = "button";
+
+  if (listenToggle) {
+    listenToggle.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (!entry.feed?.isRunning) {
+        return;
+      }
+
+      if (entry.isListening) {
+        stopFeedListen(entry);
+        return;
+      }
+
+      await startFeedListen(entry);
+    });
+  }
 
   toggle.addEventListener("click", async (event) => {
     event.stopPropagation();
     toggle.disabled = true;
-    const nextState = !feed.isRunning;
-    const prevState = feed.isRunning;
-    const prevActive = feed.isActive;
-    feed.isRunning = nextState;
-    feed.isActive = nextState || prevActive;
-    updateActiveFeedCard(entry);
-    updateActiveStatusFromNodes();
     try {
-      const endpoint = nextState ? "start" : "stop";
-      await fetchJson(`/api/feeds/${feed.id}/${endpoint}`, { method: "POST" });
-      await loadActiveFeeds();
-    } catch (error) {
-      console.error(error);
-      feed.isRunning = prevState;
-      feed.isActive = prevActive;
+      const currentFeed = entry.feed;
+      if (!currentFeed || !currentFeed.id) {
+        return;
+      }
+
+      const nextState = !Boolean(currentFeed.isRunning);
+      const prevState = Boolean(currentFeed.isRunning);
+      const prevActive = Boolean(currentFeed.isActive);
+      currentFeed.isRunning = nextState;
+      currentFeed.isActive = nextState || prevActive;
       updateActiveFeedCard(entry);
       updateActiveStatusFromNodes();
+
+      const endpoint = nextState ? "start" : "stop";
+      await fetchJson(`/api/feeds/${currentFeed.id}/${endpoint}`, { method: "POST" });
+    } catch (error) {
+      console.error(error);
     } finally {
+      try {
+        await loadActiveFeeds();
+      } catch (error) {
+        console.error(error);
+      }
       toggle.disabled = false;
     }
   });
@@ -563,12 +961,14 @@ function createActiveFeedCard(feed) {
     event.stopPropagation();
     remove.disabled = true;
     try {
-      if (feed.isRunning) {
-        await fetchJson(`/api/feeds/${feed.id}/stop`, { method: "POST" });
+      const currentFeed = entry.feed;
+      if (!currentFeed || !currentFeed.id) {
+        return;
       }
-      feed.isActive = false;
-      feed.isRunning = false;
-      activeFeedNodes.delete(feed.id);
+
+      await fetchJson(`/api/feeds/${currentFeed.id}`, { method: "DELETE" });
+      stopFeedListen(entry);
+      activeFeedNodes.delete(toFeedKey(currentFeed.id));
       card.remove();
       updateActiveStatusFromNodes();
 
@@ -576,7 +976,7 @@ function createActiveFeedCard(feed) {
         activeFeedsContainer.innerHTML = "<p class=\"muted\">No active feeds yet.</p>";
       }
 
-      if (selectedFeedId === feed.id) {
+      if (toFeedKey(selectedFeedId) === toFeedKey(currentFeed.id)) {
         selectedFeedId = null;
         updateRecordingHeader(null);
         recordingsContainer.innerHTML = "";
@@ -589,7 +989,7 @@ function createActiveFeedCard(feed) {
     }
   });
 
-  card.addEventListener("click", () => selectFeed(feed.id));
+  card.addEventListener("click", () => selectFeed(entry.feed.id));
 
   updateActiveFeedCard(entry);
   return entry;
@@ -597,6 +997,10 @@ function createActiveFeedCard(feed) {
 
 function updateActiveFeedCard(entry) {
   const feed = entry.feed;
+  if (!feed.isRunning && entry.isListening) {
+    stopFeedListen(entry);
+  }
+
   entry.title.textContent = feed.name;
   entry.meta.textContent = `Feed ID ${feed.feedIdentifier}`;
   entry.badge.textContent = feed.isRunning ? "Live" : "Paused";
@@ -605,39 +1009,41 @@ function updateActiveFeedCard(entry) {
   entry.toggle.textContent = feed.isRunning ? "Stop" : "Start";
   entry.toggle.classList.remove("is-start", "is-stop");
   entry.toggle.classList.add(feed.isRunning ? "is-stop" : "is-start");
-  entry.card.classList.toggle("selected", feed.id === selectedFeedId);
+  updateFeedListenButton(entry);
+  entry.card.classList.toggle("selected", toFeedKey(feed.id) === toFeedKey(selectedFeedId));
 }
 
 function flashFeedCard(feedId) {
-  const entry = activeFeedNodes.get(feedId);
+  const feedKey = toFeedKey(feedId);
+  const entry = activeFeedNodes.get(feedKey);
   if (!entry) {
     return;
   }
 
   entry.card.classList.add("feed-flash");
-  const existing = feedFlashTimers.get(feedId);
+  const existing = feedFlashTimers.get(feedKey);
   if (existing) {
     clearTimeout(existing);
   }
 
   const timer = setTimeout(() => {
     entry.card.classList.remove("feed-flash");
-    feedFlashTimers.delete(feedId);
+    feedFlashTimers.delete(feedKey);
   }, 4000);
-  feedFlashTimers.set(feedId, timer);
+  feedFlashTimers.set(feedKey, timer);
 }
 
 function selectFeed(feedId) {
   selectedFeedId = feedId;
+  const selectedFeedKey = toFeedKey(feedId);
   for (const entry of activeFeedNodes.values()) {
-    entry.card.classList.toggle("selected", entry.feed.id === feedId);
+    entry.card.classList.toggle("selected", toFeedKey(entry.feed.id) === selectedFeedKey);
   }
 
-  const selected = activeFeedNodes.get(feedId);
+  const selected = activeFeedNodes.get(selectedFeedKey);
   updateRecordingHeader(selected?.feed ?? null);
   resetRecordingView();
   loadRecordings({ force: true });
-  connectRecordingStream();
 }
 
 function updateRecordingHeader(feed) {
@@ -654,10 +1060,164 @@ function updateRecordingHeader(feed) {
 function resetRecordingView() {
   recordingsInitialized = false;
   latestRecordingStart = null;
+  oldestRecordingStart = null;
+  canLoadOlderRecordings = false;
+  recordingsPageLoading = false;
   recordingNodes.clear();
   recordingDayNodes.clear();
+  recordingDayTotals.clear();
   recordingsContainer.innerHTML = "";
-  disconnectRecordingStream();
+}
+
+function buildRecordingsUrl(options = {}) {
+  const feedId = options.feedId || selectedFeedId;
+  if (!feedId) {
+    return "";
+  }
+
+  const params = new URLSearchParams();
+  params.set("includeArchived", String(options.includeArchived ?? showArchived));
+
+  if (options.since) {
+    params.set("since", options.since);
+  }
+  if (options.day) {
+    params.set("day", options.day);
+  }
+  if (options.before) {
+    params.set("before", options.before);
+  }
+  if (Number.isFinite(options.limit) && options.limit > 0) {
+    params.set("limit", String(Math.trunc(options.limit)));
+  }
+
+  return `/api/feeds/${feedId}/recordings?${params.toString()}`;
+}
+
+function updateDayCount(dayKey, dayEntry) {
+  if (!dayEntry) {
+    return;
+  }
+
+  const totalCalls = recordingDayTotals.has(dayKey)
+    ? recordingDayTotals.get(dayKey)
+    : dayEntry.list.children.length;
+  const normalized = Number.isFinite(totalCalls) ? Math.max(0, Number(totalCalls)) : dayEntry.list.children.length;
+  dayEntry.count.textContent = `${normalized} calls`;
+}
+
+function updateOldestRecordingStart(recordings) {
+  if (!recordings || recordings.length === 0) {
+    return;
+  }
+
+  let oldest = oldestRecordingStart ? new Date(oldestRecordingStart) : null;
+  if (oldest && Number.isNaN(oldest.getTime())) {
+    oldest = null;
+  }
+
+  recordings.forEach((recording) => {
+    const date = new Date(recording.startUtc);
+    if (Number.isNaN(date.getTime())) {
+      return;
+    }
+    if (!oldest || date < oldest) {
+      oldest = date;
+    }
+  });
+
+  if (oldest) {
+    oldestRecordingStart = oldest.toISOString();
+  }
+}
+
+async function loadInitialRecordingsPage() {
+  if (!selectedFeedId || recordingsPageLoading) {
+    return;
+  }
+
+  const feedIdAtRequest = selectedFeedId;
+  recordingsPageLoading = true;
+  try {
+    const daySummariesResponse = await fetchJson(
+      `/api/feeds/${feedIdAtRequest}/recordings/days?includeArchived=${showArchived}`
+    );
+    if (toFeedKey(selectedFeedId) !== toFeedKey(feedIdAtRequest)) {
+      return;
+    }
+
+    const daySummaries = Array.isArray(daySummariesResponse) ? daySummariesResponse : [];
+    if (daySummaries.length === 0) {
+      recordingsContainer.innerHTML = "<p class=\"muted\">No recordings yet.</p>";
+      recordingsInitialized = true;
+      latestRecordingStart = new Date().toISOString();
+      oldestRecordingStart = null;
+      canLoadOlderRecordings = false;
+      return;
+    }
+
+    const orderedDays = daySummaries
+      .map((item) => ({
+        day: String(item.day || ""),
+        totalCalls: Number(item.totalCalls || 0)
+      }))
+      .filter((item) => item.day.length > 0)
+      .sort((a, b) => (a.day < b.day ? 1 : -1));
+
+    recordingDayTotals.clear();
+    const todayKey = toDateKey(new Date());
+    orderedDays.forEach((item) => {
+      recordingDayTotals.set(item.day, Math.max(0, item.totalCalls));
+      const dayEntry = ensureDayEntry(item.day, todayKey);
+      dayEntry.label.textContent = item.day === todayKey ? "Today" : formatDateLabel(item.day);
+      updateDayCount(item.day, dayEntry);
+      if (!dayEntry.root.isConnected) {
+        recordingsContainer.appendChild(dayEntry.root);
+      }
+    });
+
+    const loadedRecordings = [];
+    for (let i = 0; i < orderedDays.length; i += PRELOAD_CONCURRENCY) {
+      const batch = orderedDays.slice(i, i + PRELOAD_CONCURRENCY);
+      const batchResponses = await Promise.all(
+        batch.map(async (dayItem) => {
+          try {
+            const response = await fetchJson(
+              buildRecordingsUrl({
+                feedId: feedIdAtRequest,
+                day: dayItem.day,
+                limit: RECORDINGS_PER_DAY_INITIAL
+              })
+            );
+            return Array.isArray(response) ? response : [];
+          } catch (error) {
+            console.error(error);
+            return [];
+          }
+        })
+      );
+
+      if (toFeedKey(selectedFeedId) !== toFeedKey(feedIdAtRequest)) {
+        return;
+      }
+
+      batchResponses.forEach((records) => loadedRecordings.push(...records));
+    }
+
+    if (loadedRecordings.length > 0) {
+      insertRecordings(loadedRecordings, { adjustTotals: false });
+      updateLatestRecordingStart(loadedRecordings);
+      updateOldestRecordingStart(loadedRecordings);
+    } else {
+      latestRecordingStart = new Date().toISOString();
+      oldestRecordingStart = null;
+    }
+
+    recordingsInitialized = true;
+    canLoadOlderRecordings = false;
+  } finally {
+    recordingsPageLoading = false;
+  }
 }
 
 async function loadRecordings(options = {}) {
@@ -667,15 +1227,8 @@ async function loadRecordings(options = {}) {
 
   const force = options.force === true;
   if (force || !recordingsInitialized) {
-    const recordings = await fetchJson(
-      `/api/feeds/${selectedFeedId}/recordings?includeArchived=${showArchived}`
-    );
-    renderRecordings(recordings);
-    if (recordings.length === 0) {
-      latestRecordingStart = new Date().toISOString();
-    } else {
-      updateLatestRecordingStart(recordings);
-    }
+    resetRecordingView();
+    await loadInitialRecordingsPage();
     return;
   }
 
@@ -723,20 +1276,31 @@ function getSinceTimestamp() {
 }
 
 async function appendNewRecordings() {
+  if (!selectedFeedId) {
+    return;
+  }
+
+  const feedIdAtRequest = selectedFeedId;
   const since = getSinceTimestamp();
   if (!since) {
     return;
   }
 
-  const recordings = await fetchJson(
-    `/api/feeds/${selectedFeedId}/recordings?includeArchived=${showArchived}&since=${encodeURIComponent(since)}`
-  );
-
-  if (!recordings.length) {
+  const recordings = await fetchJson(buildRecordingsUrl({
+    feedId: feedIdAtRequest,
+    since
+  }));
+  if (toFeedKey(selectedFeedId) !== toFeedKey(feedIdAtRequest)) {
     return;
   }
 
-  insertRecordings(recordings);
+  const page = Array.isArray(recordings) ? recordings : [];
+
+  if (!page.length) {
+    return;
+  }
+
+  insertRecordings(page, { adjustTotals: true });
 }
 
 async function refreshRecordingStatuses() {
@@ -765,7 +1329,8 @@ async function refreshRecordingStatusesByIds(ids) {
     body: JSON.stringify({ recordingIds: ids })
   });
 
-  response.forEach((recording) => {
+  const recordings = Array.isArray(response) ? response : [];
+  recordings.forEach((recording) => {
     const node = recordingNodes.get(recording.id);
     if (node) {
       updateRecordingNode(node, recording);
@@ -773,31 +1338,51 @@ async function refreshRecordingStatusesByIds(ids) {
   });
 }
 
-function connectRecordingStream() {
-  disconnectRecordingStream();
-
-  if (!refreshEnabled || !selectedFeedId) {
+async function syncSelectedFeedFromApi() {
+  if (!selectedFeedId || !recordingsInitialized || streamSyncInFlight) {
     return;
   }
 
-  const url = `/api/recordings/stream?feedId=${encodeURIComponent(selectedFeedId)}`;
+  streamSyncInFlight = true;
+  try {
+    await appendNewRecordings();
+    await refreshRecordingStatuses();
+  } finally {
+    streamSyncInFlight = false;
+  }
+}
+
+function connectRecordingStream() {
+  disconnectRecordingStream();
+
+  if (!refreshEnabled) {
+    return;
+  }
+
+  const url = "/api/recordings/stream";
   eventSource = new EventSource(url);
 
   const handleEvent = (type) => async (event) => {
     try {
       const payload = JSON.parse(event.data);
+      if (!payload) {
+        return;
+      }
+
+      if (type === "created" && payload.feedId) {
+        flashFeedCard(payload.feedId);
+      }
+
       const payloadFeedId = payload?.feedId ? String(payload.feedId).toLowerCase() : "";
       const selectedId = selectedFeedId ? String(selectedFeedId).toLowerCase() : "";
-      if (!payload || payloadFeedId !== selectedId) {
-        if (payload && type === "created") {
-          flashFeedCard(payload.feedId);
-        }
+      if (!selectedId || payloadFeedId !== selectedId) {
         return;
       }
 
       if (type === "archived") {
         if (!showArchived) {
           removeRecordingNode(payload.recordingId);
+          await refreshRecordingStatuses();
           return;
         }
       }
@@ -814,28 +1399,31 @@ function connectRecordingStream() {
           updateRecordingNode(node, recording);
         }
       } else {
-        insertRecordings([recording]);
+        insertRecordings([recording], { adjustTotals: type === "created" });
       }
 
-      if (type === "created") {
-        flashFeedCard(recording.feedId);
-      }
-
-      if (type === "created" || type === "updated") {
-        await refreshRecordingStatuses();
-      }
+      await refreshRecordingStatuses();
     } catch (error) {
       console.error(error);
     }
   };
 
+  eventSource.addEventListener("open", () => {
+    syncSelectedFeedFromApi().catch((error) => console.error(error));
+  });
+
   eventSource.addEventListener("snapshot", async (event) => {
     try {
       const payload = JSON.parse(event.data);
+      const snapshotFeedId = payload?.feedId ? String(payload.feedId).toLowerCase() : null;
+      const selectedId = selectedFeedId ? String(selectedFeedId).toLowerCase() : "";
       const ids = Array.isArray(payload?.recordingIds) ? payload.recordingIds : [];
-      if (ids.length > 0) {
+
+      if (snapshotFeedId && selectedId && snapshotFeedId === selectedId && ids.length > 0) {
         await refreshRecordingStatusesByIds(ids);
       }
+
+      await syncSelectedFeedFromApi();
     } catch (error) {
       console.error(error);
     }
@@ -845,12 +1433,12 @@ function connectRecordingStream() {
   eventSource.addEventListener("updated", handleEvent("updated"));
   eventSource.addEventListener("archived", handleEvent("archived"));
   eventSource.onerror = () => {
-    if (!refreshEnabled || !selectedFeedId) {
+    if (!refreshEnabled) {
       return;
     }
     disconnectRecordingStream();
     setTimeout(() => {
-      if (refreshEnabled && selectedFeedId) {
+      if (refreshEnabled) {
         connectRecordingStream();
       }
     }, 1000);
@@ -884,7 +1472,7 @@ function connectFeedStream() {
           return;
         }
 
-        const entry = activeFeedNodes.get(item.feedId);
+        const entry = activeFeedNodes.get(toFeedKey(item.feedId));
         if (!entry) {
           return;
         }
@@ -911,7 +1499,7 @@ function connectFeedStream() {
         return;
       }
 
-      const entry = activeFeedNodes.get(payload.feedId);
+      const entry = activeFeedNodes.get(toFeedKey(payload.feedId));
       if (!entry) {
         return;
       }
@@ -929,6 +1517,17 @@ function connectFeedStream() {
       console.error(error);
     }
   });
+  feedEventSource.onerror = () => {
+    if (!refreshEnabled) {
+      return;
+    }
+    disconnectFeedStream();
+    setTimeout(() => {
+      if (refreshEnabled) {
+        connectFeedStream();
+      }
+    }, 1000);
+  };
 }
 
 function disconnectFeedStream() {
@@ -954,11 +1553,22 @@ function removeRecordingNode(recordingId) {
       const dayKey = dayRoot.dataset.dayKey;
       const dayEntry = dayKey ? recordingDayNodes.get(dayKey) : null;
       if (dayEntry) {
-        const count = dayEntry.list.children.length;
-        dayEntry.count.textContent = `${count} calls`;
-        if (count === 0) {
+        if (dayKey && recordingDayTotals.has(dayKey)) {
+          const current = Number(recordingDayTotals.get(dayKey) || 0);
+          recordingDayTotals.set(dayKey, Math.max(0, current - 1));
+        }
+
+        updateDayCount(dayKey || "", dayEntry);
+        const totalCalls = dayKey && recordingDayTotals.has(dayKey)
+          ? Number(recordingDayTotals.get(dayKey) || 0)
+          : dayEntry.list.children.length;
+
+        if (totalCalls <= 0) {
           dayEntry.root.remove();
-          recordingDayNodes.delete(dayKey);
+          if (dayKey) {
+            recordingDayNodes.delete(dayKey);
+            recordingDayTotals.delete(dayKey);
+          }
         }
       }
     }
@@ -996,7 +1606,7 @@ function renderRecordings(recordings) {
 
     const label = key === todayKey ? "Today" : formatDateLabel(key);
     dayEntry.label.textContent = label;
-    dayEntry.count.textContent = `${recordingsForDay.length} calls`;
+    updateDayCount(key, dayEntry);
 
     const desiredIds = recordingsForDay.map((recording) => recording.id);
     const desiredSet = new Set(desiredIds);
@@ -1025,6 +1635,7 @@ function renderRecordings(recordings) {
     if (!seenDayKeys.has(key)) {
       entry.root.remove();
       recordingDayNodes.delete(key);
+      recordingDayTotals.delete(key);
     }
   }
 
@@ -1053,6 +1664,7 @@ function ensureDayEntry(key, todayKey) {
   const dayFragment = recordingDayTemplate.content.cloneNode(true);
   const dayRoot = dayFragment.querySelector(".recording-day");
   const dayToggle = dayFragment.querySelector(".day-toggle");
+  const daySynthesize = dayFragment.querySelector(".day-synthesize");
   const dayArchive = dayFragment.querySelector(".day-archive");
   const dayLabel = dayFragment.querySelector(".day-label");
   const dayCount = dayFragment.querySelector(".day-count");
@@ -1065,6 +1677,7 @@ function ensureDayEntry(key, todayKey) {
     key,
     root: dayRoot,
     toggle: dayToggle,
+    synthesize: daySynthesize,
     archive: dayArchive,
     label: dayLabel,
     count: dayCount,
@@ -1077,6 +1690,13 @@ function ensureDayEntry(key, todayKey) {
     dayEntry.list.hidden = !dayEntry.expanded;
   });
 
+  if (daySynthesize) {
+    daySynthesize.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await synthesizeDay(key, dayEntry);
+    });
+  }
+
   dayArchive.addEventListener("click", async (event) => {
     event.stopPropagation();
     await archiveDay(key);
@@ -1086,11 +1706,12 @@ function ensureDayEntry(key, todayKey) {
   return dayEntry;
 }
 
-function insertRecordings(recordings) {
+function insertRecordings(recordings, options = {}) {
   if (!recordings.length) {
     return;
   }
 
+  const adjustTotals = options.adjustTotals === true;
   const emptyMessage = recordingsContainer.querySelector("p.muted");
   if (emptyMessage) {
     emptyMessage.remove();
@@ -1115,12 +1736,13 @@ function insertRecordings(recordings) {
     const label = key === todayKey ? "Today" : formatDateLabel(key);
     dayEntry.label.textContent = label;
 
-  recordingsForDay.sort((a, b) => (a.startUtc < b.startUtc ? 1 : -1));
-  recordingsForDay.forEach((recording) => {
-    if (recording.isArchived && !showArchived) {
-      return;
-    }
-    const existing = recordingNodes.get(recording.id);
+    recordingsForDay.sort((a, b) => (a.startUtc < b.startUtc ? 1 : -1));
+    recordingsForDay.forEach((recording) => {
+      if (recording.isArchived && !showArchived) {
+        return;
+      }
+
+      const existing = recordingNodes.get(recording.id);
       if (existing) {
         updateRecordingNode(existing, recording);
         return;
@@ -1129,9 +1751,17 @@ function insertRecordings(recordings) {
       const shouldHighlight = shouldHighlightRecording(recording);
       const node = getRecordingNode(recording, shouldHighlight);
       dayEntry.list.insertBefore(node.root, dayEntry.list.firstChild);
+
+      if (adjustTotals) {
+        if (recordingDayTotals.has(key)) {
+          recordingDayTotals.set(key, Number(recordingDayTotals.get(key) || 0) + 1);
+        } else {
+          recordingDayTotals.set(key, 1);
+        }
+      }
     });
 
-    dayEntry.count.textContent = `${dayEntry.list.children.length} calls`;
+    updateDayCount(key, dayEntry);
 
     if (!dayEntry.root.isConnected) {
       const existingDays = Array.from(recordingsContainer.querySelectorAll(".recording-day"));
@@ -1283,6 +1913,7 @@ function getRecordingNode(recording, shouldHighlight) {
       newTimeout: null,
       hasTranscript: false
     };
+    node.audio.preload = "none";
     node.transcriptToggle.addEventListener("click", (event) => {
       event.stopPropagation();
       toggleTranscript(node);
@@ -1452,8 +2083,13 @@ function formatDateLabel(key) {
 }
 
 async function addFeedFromDiscovery(payload) {
+  const requestedFeedId = String(payload?.feedId ?? "").trim();
+  if (!requestedFeedId) {
+    throw new Error("Invalid feed selection.");
+  }
+
   const feeds = await fetchJson("/api/feeds");
-  const existing = feeds.find((feed) => feed.feedIdentifier === payload.feedId);
+  const existing = feeds.find((feed) => String(feed.feedIdentifier) === requestedFeedId);
 
   let targetFeed = existing;
   if (!existing) {
@@ -1461,17 +2097,19 @@ async function addFeedFromDiscovery(payload) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        broadcastifyUrl: payload.feedId,
+        broadcastifyUrl: requestedFeedId,
         name: `${payload.feedName} (${payload.county}, ${payload.state})`
       })
     });
   }
 
-  if (targetFeed) {
-    await fetchJson(`/api/feeds/${targetFeed.id}/start`, { method: "POST" });
+  try {
+    if (targetFeed) {
+      await fetchJson(`/api/feeds/${targetFeed.id}/start`, { method: "POST" });
+    }
+  } finally {
+    await loadActiveFeeds();
   }
-
-  await loadActiveFeeds();
 }
 
 function setupDragAndDrop() {
@@ -1502,6 +2140,58 @@ function setupDragAndDrop() {
 }
 
 refreshStatesButton.addEventListener("click", () => loadStates().catch((err) => console.error(err)));
+if (addLocalFeedButton) {
+  addLocalFeedButton.addEventListener("click", () => {
+    openLocalFeedModal().catch((err) => console.error(err));
+  });
+}
+if (localFeedCancelButton) {
+  localFeedCancelButton.addEventListener("click", closeLocalFeedModal);
+}
+if (localFeedSubmitButton) {
+  localFeedSubmitButton.addEventListener("click", () => {
+    submitLocalFeed().catch((err) => console.error(err));
+  });
+}
+if (localFeedNameInput) {
+  localFeedNameInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submitLocalFeed().catch((err) => console.error(err));
+    }
+  });
+}
+if (localFeedModal) {
+  localFeedModal.addEventListener("click", (event) => {
+    if (event.target === localFeedModal) {
+      closeLocalFeedModal();
+    }
+  });
+}
+if (synthesisCloseButton) {
+  synthesisCloseButton.addEventListener("click", closeSynthesisModal);
+}
+if (synthesisModal) {
+  synthesisModal.addEventListener("click", (event) => {
+    if (event.target === synthesisModal) {
+      closeSynthesisModal();
+    }
+  });
+}
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") {
+    return;
+  }
+
+  if (localFeedModal && !localFeedModal.hidden) {
+    closeLocalFeedModal();
+    return;
+  }
+
+  if (synthesisModal && !synthesisModal.hidden) {
+    closeSynthesisModal();
+  }
+});
 searchInput.addEventListener("input", applySearchFilter);
 navLinks.forEach((link) => {
   link.addEventListener("click", () => showPage(link.dataset.page));

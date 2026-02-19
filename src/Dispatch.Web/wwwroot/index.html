@@ -16,7 +16,7 @@
     <div class="app-shell">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-title">WEBB</span>
+          <span class="brand-title">DISPATCHIFY</span>
           <nav class="nav-links">
             <button class="nav-link active" type="button" data-page="dashboard">Dashboard</button>
             <button class="nav-link" type="button" data-page="settings">Settings</button>
@@ -36,7 +36,10 @@
               <p class="eyebrow">Feed Discovery</p>
               <h2>Audio Feeds</h2>
             </div>
-            <button id="refresh-states" class="ghost" type="button">Refresh</button>
+            <div class="sidebar-actions">
+              <button id="add-local-feed" class="ghost icon-button" type="button" title="Add local audio source">+</button>
+              <button id="refresh-states" class="ghost" type="button">Refresh</button>
+            </div>
           </div>
 
           <div class="search-box">
@@ -107,16 +110,54 @@
 
             <div class="settings-card">
               <h3>Progress Interval</h3>
-              <p class="muted">Set how often processing progress ticks update locally.</p>
+              <p class="muted">Set how often processing progress ticks and fallback sync run locally.</p>
               <label class="interval-row">
-                <span>Interval (seconds)</span>
-                <input id="refresh-interval" type="number" min="2" max="120" step="1" />
+                <span>Interval (milliseconds)</span>
+                <input id="refresh-interval" type="number" min="0" step="1" />
               </label>
               <p class="muted small" id="refresh-interval-value"></p>
             </div>
           </div>
         </div>
       </section>
+    </div>
+
+    <div id="local-feed-modal" class="modal-overlay" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="local-feed-title">
+        <h3 id="local-feed-title">Add Local Audio Source</h3>
+        <p class="muted">Select a microphone or loopback/output device from this machine.</p>
+        <label class="modal-field">
+          <span>Device</span>
+          <select id="local-device-select"></select>
+        </label>
+        <label class="modal-field">
+          <span>Name (optional)</span>
+          <input id="local-feed-name" type="text" placeholder="Use device name" />
+        </label>
+        <label class="checkbox-row">
+          <input id="local-feed-autostart" type="checkbox" checked />
+          <span>Start immediately</span>
+        </label>
+        <p id="local-feed-note" class="muted small"></p>
+        <div class="modal-actions">
+          <button id="local-feed-cancel" class="ghost" type="button">Cancel</button>
+          <button id="local-feed-submit" class="primary" type="button">Add Source</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="synthesis-modal" class="modal-overlay" hidden>
+      <div class="modal-card synthesis-modal-card" role="dialog" aria-modal="true" aria-labelledby="synthesis-title">
+        <h3 id="synthesis-title">Daily Synthesis</h3>
+        <p id="synthesis-meta" class="muted"></p>
+        <p id="synthesis-summary"></p>
+        <div id="synthesis-themes" class="synthesis-themes"></div>
+        <ul id="synthesis-categories" class="synthesis-categories"></ul>
+        <div id="synthesis-highlights" class="synthesis-highlights"></div>
+        <div class="modal-actions">
+          <button id="synthesis-close" class="primary" type="button">Close</button>
+        </div>
+      </div>
     </div>
 
     <template id="tree-state-template">
@@ -150,8 +191,9 @@
         </div>
         <span class="badge"></span>
         <div class="active-actions">
-          <button class="primary toggle">Stop</button>
-          <button class="ghost remove" title="Remove feed">X</button>
+          <button class="ghost listen-toggle" type="button" title="Unmute monitor" aria-label="Unmute monitor">&#128263;</button>
+          <button class="primary toggle" type="button">Stop</button>
+          <button class="ghost remove" title="Remove feed" type="button">X</button>
         </div>
       </article>
     </template>
@@ -186,6 +228,7 @@
             <span class="day-label"></span>
             <span class="day-count"></span>
           </button>
+          <button class="ghost day-synthesize" type="button">Synthesize</button>
           <button class="ghost day-archive" type="button">Archive</button>
         </div>
         <div class="day-list"></div>
