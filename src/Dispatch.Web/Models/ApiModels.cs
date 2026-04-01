@@ -77,3 +77,22 @@ public record LocalAudioDeviceDto(
     string Name,
     string Backend,
     string CaptureKind);
+
+public record RegisterRequest(string Email, string Password);
+
+public record LoginRequest(string Email, string Password);
+
+public record UserDto(Guid Id, string Email);
+
+public record FeedWithSubscriptionDto(
+    Guid Id,
+    string Name,
+    string BroadcastifyUrl,
+    string StreamUrl,
+    string FeedIdentifier,
+    bool IsActive,
+    bool IsRunning,
+    DateTime CreatedUtc,
+    DateTime? LastStartedUtc,
+    DateTime? LastStoppedUtc,
+    bool IsSubscribed);

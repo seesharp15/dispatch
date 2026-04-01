@@ -30,4 +30,6 @@ public class Feed
     public DateTime? LastStoppedUtc { get; set; }
 
     public ICollection<Recording> Recordings { get; set; } = new List<Recording>();
+
+    public ICollection<UserFeedSubscription> Subscriptions { get; set; } = new List<UserFeedSubscription>();
 }

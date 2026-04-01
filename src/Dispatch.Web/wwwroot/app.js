@@ -88,6 +88,11 @@ async function fetchJson(url, options) {
     }
   }
 
+  if (response.status === 401) {
+    window.location.href = "/login.html";
+    return;
+  }
+
   if (!response.ok) {
     const message =
       (parsedBody && typeof parsedBody === "object" && parsedBody.message) ||
@@ -2201,12 +2206,28 @@ refreshIntervalInput.addEventListener("change", applyRefreshSettings);
 refreshIntervalInput.addEventListener("blur", applyRefreshSettings);
   showArchivedToggle.addEventListener("change", applyArchiveSettings);
 
-setupContextMenu();
-setupDragAndDrop();
-loadUiConfig();
-loadStates().catch((err) => console.error(err));
-loadActiveFeeds().catch((err) => console.error(err));
-loadRefreshSettings();
-loadArchiveSettings();
-restartAutoRefresh();
-showPage("dashboard");
+document.getElementById("sign-out-btn")?.addEventListener("click", () => {
+  window.location.href = "/api/auth/logout";
+});
+
+(async () => {
+  try {
+    const user = await fetchJson("/api/auth/me");
+    if (!user) return; // fetchJson already redirected on 401
+    const emailEl = document.getElementById("user-email");
+    if (emailEl) emailEl.textContent = user.email;
+  } catch {
+    window.location.href = "/login.html";
+    return;
+  }
+
+  setupContextMenu();
+  setupDragAndDrop();
+  loadUiConfig();
+  loadStates().catch((err) => console.error(err));
+  loadActiveFeeds().catch((err) => console.error(err));
+  loadRefreshSettings();
+  loadArchiveSettings();
+  restartAutoRefresh();
+  showPage("dashboard");
+})();

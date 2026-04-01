@@ -4,6 +4,7 @@ using Dispatch.Web.Models;
 using Dispatch.Web.Options;
 using Dispatch.Web.Services;
 using Dispatch.Web.Workers;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Http.Json;
@@ -12,6 +13,7 @@ using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using System.Diagnostics;
+using System.Security.Claims;
 using DiscoveryBroadcastifyOptions = FeedDiscovery.Broadcastify.BroadcastifyOptions;
 
 string ResolveRecordingPath(string path, IHostEnvironment env)
@@ -125,6 +127,34 @@ async Task<(Dictionary<Guid, int> Map, int Total)> GetPendingQueueAsync(Dispatch
     return (map, pendingIds.Count);
 }
 
+Guid? GetUserId(HttpContext context)
+{
+    var value = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    return Guid.TryParse(value, out var id) ? id : null;
+}
+
+async Task<bool> UserIsSubscribedAsync(DispatchDbContext db, Guid userId, Guid feedId, CancellationToken ct)
+{
+    return await db.UserFeedSubscriptions
+        .AnyAsync(s => s.UserId == userId && s.FeedId == feedId, ct);
+}
+
+async Task EnsureSubscriptionAsync(DispatchDbContext db, Guid userId, Guid feedId)
+{
+    var exists = await db.UserFeedSubscriptions
+        .AnyAsync(s => s.UserId == userId && s.FeedId == feedId);
+    if (!exists)
+    {
+        db.UserFeedSubscriptions.Add(new UserFeedSubscription
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            FeedId = feedId,
+            SubscribedUtc = DateTime.UtcNow
+        });
+    }
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 string ResolvePath(string basePath, string path)
@@ -173,6 +203,41 @@ if (!string.IsNullOrWhiteSpace(dbDirectory))
 builder.Services.AddDbContext<DispatchDbContext>(options =>
     options.UseSqlite($"Data Source={storageOptions.DatabasePath}"));
 
+builder.Services.AddIdentity<ApplicationUser, IdentityRole<Guid>>(options =>
+{
+    options.Password.RequireDigit = false;
+    options.Password.RequireLowercase = false;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequireUppercase = false;
+    options.Password.RequiredLength = 8;
+    options.User.RequireUniqueEmail = true;
+    options.SignIn.RequireConfirmedEmail = false;
+})
+.AddEntityFrameworkStores<DispatchDbContext>();
+
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.LoginPath = null;
+    options.AccessDeniedPath = null;
+    options.Events.OnRedirectToLogin = context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return Task.CompletedTask;
+    };
+    options.Events.OnRedirectToAccessDenied = context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return Task.CompletedTask;
+    };
+    options.SlidingExpiration = true;
+    options.ExpireTimeSpan = TimeSpan.FromDays(14);
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+});
+
+builder.Services.AddAuthorization();
+
 builder.Services.AddHttpClient("stream")
     .ConfigureHttpClient(client =>
     {
@@ -209,11 +274,13 @@ var app = builder.Build();
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.UseAuthentication();
+app.UseAuthorization();
 
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<DispatchDbContext>();
-    db.Database.EnsureCreated();
+    db.Database.Migrate();
 
     var connection = db.Database.GetDbConnection();
     connection.Open();
@@ -267,7 +334,7 @@ app.MapGet("/api/discovery/states", (IOptions<DiscoveryBroadcastifyOptions> opti
         .ToList();
 
     return Results.Ok(states);
-});
+}).RequireAuthorization();
 
 app.MapGet("/api/discovery/feeds", async (string state, string? county, IFeedDiscoveryService service, CancellationToken ct) =>
 {
@@ -288,7 +355,7 @@ app.MapGet("/api/discovery/feeds", async (string state, string? county, IFeedDis
     });
 
     return Results.Ok(response);
-});
+}).RequireAuthorization();
 
 app.MapGet("/api/local-audio/devices", async (ILocalAudioFeedProvider provider, CancellationToken ct) =>
 {
@@ -299,14 +366,18 @@ app.MapGet("/api/local-audio/devices", async (ILocalAudioFeedProvider provider, 
         d.Backend,
         d.CaptureKind));
     return Results.Ok(response);
-});
+}).RequireAuthorization();
 
-app.MapGet("/api/feeds", async (DispatchDbContext db, FeedCoordinator coordinator) =>
+app.MapGet("/api/feeds", async (DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
     var feeds = await db.Feeds.AsNoTracking()
-        .Where(f => f.IsVisible)
+        .Where(f => f.IsVisible && f.Subscriptions.Any(s => s.UserId == userId.Value))
         .OrderBy(f => f.Name)
-        .ToListAsync();
+        .ToListAsync(ct);
+
     var response = feeds.Select(feed => new FeedDto(
         feed.Id,
         feed.Name,
@@ -320,24 +391,28 @@ app.MapGet("/api/feeds", async (DispatchDbContext db, FeedCoordinator coordinato
         feed.LastStoppedUtc.HasValue ? AsUtc(feed.LastStoppedUtc.Value) : null));
 
     return Results.Ok(response);
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/feeds", async (AddFeedRequest request, DispatchDbContext db, BroadcastifyResolver resolver) =>
+app.MapPost("/api/feeds", async (AddFeedRequest request, DispatchDbContext db, BroadcastifyResolver resolver, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
     if (!resolver.TryResolve(request.BroadcastifyUrl, out var feedId, out var streamUrl))
     {
         return Results.BadRequest(new { message = "Unable to parse Broadcastify feed URL or ID." });
     }
 
     var name = string.IsNullOrWhiteSpace(request.Name) ? $"Feed {feedId}" : request.Name.Trim();
-    var existingFeed = await db.Feeds.FirstOrDefaultAsync(f => f.FeedIdentifier == feedId);
+    var existingFeed = await db.Feeds.FirstOrDefaultAsync(f => f.FeedIdentifier == feedId, ct);
     if (existingFeed != null)
     {
         existingFeed.Name = name;
         existingFeed.BroadcastifyUrl = request.BroadcastifyUrl.Trim();
         existingFeed.StreamUrl = streamUrl;
         existingFeed.IsVisible = true;
-        await db.SaveChangesAsync();
+        await EnsureSubscriptionAsync(db, userId.Value, existingFeed.Id);
+        await db.SaveChangesAsync(ct);
 
         return Results.Ok(new FeedDto(
             existingFeed.Id,
@@ -365,7 +440,8 @@ app.MapPost("/api/feeds", async (AddFeedRequest request, DispatchDbContext db, B
     };
 
     db.Feeds.Add(feed);
-    await db.SaveChangesAsync();
+    await EnsureSubscriptionAsync(db, userId.Value, feed.Id);
+    await db.SaveChangesAsync(ct);
 
     return Results.Ok(new FeedDto(
         feed.Id,
@@ -378,10 +454,13 @@ app.MapPost("/api/feeds", async (AddFeedRequest request, DispatchDbContext db, B
         feed.CreatedUtc,
         feed.LastStartedUtc,
         feed.LastStoppedUtc));
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/feeds/local", async (AddLocalFeedRequest request, DispatchDbContext db, ILocalAudioFeedProvider provider, FeedCoordinator coordinator, CancellationToken ct) =>
+app.MapPost("/api/feeds/local", async (AddLocalFeedRequest request, DispatchDbContext db, ILocalAudioFeedProvider provider, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
     if (string.IsNullOrWhiteSpace(request.DeviceId))
     {
         return Results.BadRequest(new { message = "DeviceId is required." });
@@ -443,6 +522,7 @@ app.MapPost("/api/feeds/local", async (AddLocalFeedRequest request, DispatchDbCo
         db.Feeds.Add(targetFeed);
     }
 
+    await EnsureSubscriptionAsync(db, userId.Value, targetFeed.Id);
     await db.SaveChangesAsync(ct);
 
     if (startImmediately)
@@ -465,15 +545,16 @@ app.MapPost("/api/feeds/local", async (AddLocalFeedRequest request, DispatchDbCo
         AsUtc(targetFeed.CreatedUtc),
         targetFeed.LastStartedUtc.HasValue ? AsUtc(targetFeed.LastStartedUtc.Value) : null,
         targetFeed.LastStoppedUtc.HasValue ? AsUtc(targetFeed.LastStoppedUtc.Value) : null));
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/feeds/{id:guid}/start", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, CancellationToken ct) =>
+app.MapPost("/api/feeds/{id:guid}/start", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
+
     var feed = await db.Feeds.FirstOrDefaultAsync(f => f.Id == id && f.IsVisible, ct);
-    if (feed == null)
-    {
-        return Results.NotFound();
-    }
+    if (feed == null) return Results.NotFound();
 
     feed.IsActive = true;
     feed.LastStartedUtc = DateTime.UtcNow;
@@ -482,15 +563,16 @@ app.MapPost("/api/feeds/{id:guid}/start", async (Guid id, DispatchDbContext db, 
     await coordinator.StartAsync(feed, ct, feed.IsActive);
 
     return Results.Ok();
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/feeds/{id:guid}/stop", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, CancellationToken ct) =>
+app.MapPost("/api/feeds/{id:guid}/stop", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
+
     var feed = await db.Feeds.FirstOrDefaultAsync(f => f.Id == id && f.IsVisible, ct);
-    if (feed == null)
-    {
-        return Results.NotFound();
-    }
+    if (feed == null) return Results.NotFound();
 
     feed.IsActive = false;
     feed.LastStoppedUtc = DateTime.UtcNow;
@@ -499,10 +581,14 @@ app.MapPost("/api/feeds/{id:guid}/stop", async (Guid id, DispatchDbContext db, F
     await coordinator.StopAsync(feed.Id, feed.IsActive);
 
     return Results.Ok();
-});
+}).RequireAuthorization();
 
 app.MapGet("/api/feeds/{id:guid}/listen", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, IOptions<DecoderOptions> decoderOptions, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
+
     var feed = await db.Feeds.AsNoTracking().FirstOrDefaultAsync(f => f.Id == id && f.IsVisible, ct);
     if (feed == null)
     {
@@ -623,15 +709,16 @@ app.MapGet("/api/feeds/{id:guid}/listen", async (Guid id, DispatchDbContext db, 
     }
 
     return Results.Empty;
-});
+}).RequireAuthorization();
 
-app.MapDelete("/api/feeds/{id:guid}", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, CancellationToken ct) =>
+app.MapDelete("/api/feeds/{id:guid}", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
+
     var feed = await db.Feeds.FirstOrDefaultAsync(f => f.Id == id, ct);
-    if (feed == null)
-    {
-        return Results.NotFound();
-    }
+    if (feed == null) return Results.NotFound();
 
     feed.IsVisible = false;
     if (feed.IsActive)
@@ -644,10 +731,14 @@ app.MapDelete("/api/feeds/{id:guid}", async (Guid id, DispatchDbContext db, Feed
     await coordinator.StopAsync(feed.Id, feed.IsActive);
 
     return Results.Ok();
-});
+}).RequireAuthorization();
 
-app.MapGet("/api/feeds/{id:guid}/recordings/days", async (Guid id, bool includeArchived, DispatchDbContext db, CancellationToken ct) =>
+app.MapGet("/api/feeds/{id:guid}/recordings/days", async (Guid id, bool includeArchived, DispatchDbContext db, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
+
     var feedExists = await db.Feeds.AsNoTracking()
         .AnyAsync(f => f.Id == id && f.IsVisible, ct);
     if (!feedExists)
@@ -675,10 +766,14 @@ app.MapGet("/api/feeds/{id:guid}/recordings/days", async (Guid id, bool includeA
         .ToList();
 
     return Results.Ok(days);
-});
+}).RequireAuthorization();
 
-app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchived, string? day, DateTimeOffset? since, DateTimeOffset? before, int? limit, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, CancellationToken ct) =>
+app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchived, string? day, DateTimeOffset? since, DateTimeOffset? before, int? limit, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
+
     var query = db.Recordings.AsNoTracking()
         .Where(r => r.FeedId == id);
 
@@ -749,10 +844,14 @@ app.MapGet("/api/feeds/{id:guid}/recordings", async (Guid id, bool includeArchiv
         r.ArchivedUtc.HasValue ? AsUtc(r.ArchivedUtc.Value) : null));
 
     return Results.Ok(response);
-});
+}).RequireAuthorization();
 
-app.MapGet("/api/feeds/{id:guid}/synthesis", async (Guid id, string day, bool includeArchived, DispatchDbContext db, IDailyTranscriptSynthesizer synthesizer, CancellationToken ct) =>
+app.MapGet("/api/feeds/{id:guid}/synthesis", async (Guid id, string day, bool includeArchived, DispatchDbContext db, IDailyTranscriptSynthesizer synthesizer, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
+
     if (string.IsNullOrWhiteSpace(day) ||
         !DateOnly.TryParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dayDate))
     {
@@ -804,15 +903,16 @@ app.MapGet("/api/feeds/{id:guid}/synthesis", async (Guid id, string day, bool in
             .ToList());
 
     return Results.Ok(response);
-});
+}).RequireAuthorization();
 
-app.MapGet("/api/recordings/{id:guid}/audio", async (Guid id, DispatchDbContext db, IWebHostEnvironment env) =>
+app.MapGet("/api/recordings/{id:guid}/audio", async (Guid id, DispatchDbContext db, IWebHostEnvironment env, HttpContext context, CancellationToken ct) =>
 {
-    var recording = await db.Recordings.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id);
-    if (recording == null)
-    {
-        return Results.NotFound();
-    }
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    var recording = await db.Recordings.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
+    if (recording == null) return Results.NotFound();
+    if (!await UserIsSubscribedAsync(db, userId.Value, recording.FeedId, ct)) return Results.NotFound();
 
     var filePath = ResolveRecordingPath(recording.FilePath, env);
 
@@ -822,15 +922,16 @@ app.MapGet("/api/recordings/{id:guid}/audio", async (Guid id, DispatchDbContext 
     }
 
     return Results.File(filePath, "audio/wav", enableRangeProcessing: true);
-});
+}).RequireAuthorization();
 
-app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, CancellationToken ct) =>
+app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
     var recording = await db.Recordings.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
-    if (recording == null)
-    {
-        return Results.NotFound();
-    }
+    if (recording == null) return Results.NotFound();
+    if (!await UserIsSubscribedAsync(db, userId.Value, recording.FeedId, ct)) return Results.NotFound();
 
     var queueInfo = await GetPendingQueueAsync(db, ct);
 
@@ -851,10 +952,13 @@ app.MapGet("/api/recordings/{id:guid}", async (Guid id, DispatchDbContext db, IO
         recording.TranscriptProvider,
         recording.IsArchived,
         recording.ArchivedUtc.HasValue ? AsUtc(recording.ArchivedUtc.Value) : null));
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/recordings/batch", async (BatchRecordingsRequest request, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, CancellationToken ct) =>
+app.MapPost("/api/recordings/batch", async (BatchRecordingsRequest request, DispatchDbContext db, IOptions<TranscriptionOptions> options, IWebHostEnvironment env, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
     if (request?.RecordingIds == null || request.RecordingIds.Count == 0)
     {
         return Results.Ok(Array.Empty<RecordingDto>());
@@ -869,8 +973,13 @@ app.MapPost("/api/recordings/batch", async (BatchRecordingsRequest request, Disp
         return Results.Ok(Array.Empty<RecordingDto>());
     }
 
+    var subscribedFeedIds = (await db.UserFeedSubscriptions
+        .Where(s => s.UserId == userId.Value)
+        .Select(s => s.FeedId)
+        .ToListAsync(ct)).ToHashSet();
+
     var recordings = await db.Recordings.AsNoTracking()
-        .Where(r => ids.Contains(r.Id))
+        .Where(r => ids.Contains(r.Id) && subscribedFeedIds.Contains(r.FeedId))
         .ToListAsync(ct);
 
     var queueInfo = await GetPendingQueueAsync(db, ct);
@@ -894,15 +1003,16 @@ app.MapPost("/api/recordings/batch", async (BatchRecordingsRequest request, Disp
         r.ArchivedUtc.HasValue ? AsUtc(r.ArchivedUtc.Value) : null));
 
     return Results.Ok(response);
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/recordings/{id:guid}/reprocess", async (Guid id, DispatchDbContext db, IRecordingEventHub eventHub, CancellationToken ct) =>
+app.MapPost("/api/recordings/{id:guid}/reprocess", async (Guid id, DispatchDbContext db, IRecordingEventHub eventHub, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
     var recording = await db.Recordings.FirstOrDefaultAsync(r => r.Id == id, ct);
-    if (recording == null)
-    {
-        return Results.NotFound();
-    }
+    if (recording == null) return Results.NotFound();
+    if (!await UserIsSubscribedAsync(db, userId.Value, recording.FeedId, ct)) return Results.NotFound();
 
     if (!string.IsNullOrWhiteSpace(recording.TranscriptPath) && File.Exists(recording.TranscriptPath))
     {
@@ -940,15 +1050,16 @@ app.MapPost("/api/recordings/{id:guid}/reprocess", async (Guid id, DispatchDbCon
     await db.SaveChangesAsync(ct);
     await eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Updated));
     return Results.Ok();
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/recordings/{id:guid}/archive", async (Guid id, DispatchDbContext db, IRecordingEventHub eventHub, CancellationToken ct) =>
+app.MapPost("/api/recordings/{id:guid}/archive", async (Guid id, DispatchDbContext db, IRecordingEventHub eventHub, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
     var recording = await db.Recordings.FirstOrDefaultAsync(r => r.Id == id, ct);
-    if (recording == null)
-    {
-        return Results.NotFound();
-    }
+    if (recording == null) return Results.NotFound();
+    if (!await UserIsSubscribedAsync(db, userId.Value, recording.FeedId, ct)) return Results.NotFound();
 
     if (!recording.IsArchived)
     {
@@ -959,10 +1070,14 @@ app.MapPost("/api/recordings/{id:guid}/archive", async (Guid id, DispatchDbConte
     }
 
     return Results.Ok();
-});
+}).RequireAuthorization();
 
-app.MapPost("/api/feeds/{id:guid}/recordings/archive", async (Guid id, string day, DispatchDbContext db, IRecordingEventHub eventHub, CancellationToken ct) =>
+app.MapPost("/api/feeds/{id:guid}/recordings/archive", async (Guid id, string day, DispatchDbContext db, IRecordingEventHub eventHub, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
+
     if (string.IsNullOrWhiteSpace(day) ||
         !DateOnly.TryParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dayDate))
     {
@@ -996,7 +1111,7 @@ app.MapPost("/api/feeds/{id:guid}/recordings/archive", async (Guid id, string da
         await eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Archived));
     }
     return Results.Ok(new { archived = recordings.Count });
-});
+}).RequireAuthorization();
 
 app.MapGet("/api/stream", async (string url, BroadcastifyResolver resolver, IHttpClientFactory httpClientFactory, HttpContext context, CancellationToken ct) =>
 {
@@ -1013,7 +1128,7 @@ app.MapGet("/api/stream", async (string url, BroadcastifyResolver resolver, IHtt
     await using var responseStream = await response.Content.ReadAsStreamAsync(ct);
     await responseStream.CopyToAsync(context.Response.Body, ct);
     return Results.Empty;
-});
+}).RequireAuthorization();
 
 app.MapGet("/api/ui-config", (IOptions<TranscriptionOptions> options) =>
 {
@@ -1027,6 +1142,15 @@ app.MapGet("/api/ui-config", (IOptions<TranscriptionOptions> options) =>
 
 app.MapGet("/api/feeds/stream", async (IFeedEventHub eventHub, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    var subscribedFeedIds = (await db.UserFeedSubscriptions
+        .AsNoTracking()
+        .Where(s => s.UserId == userId.Value)
+        .Select(s => s.FeedId)
+        .ToListAsync(ct)).ToHashSet();
+
     var subscription = eventHub.Subscribe(ct);
 
     context.Response.Headers.CacheControl = "no-cache";
@@ -1039,7 +1163,7 @@ app.MapGet("/api/feeds/stream", async (IFeedEventHub eventHub, DispatchDbContext
     };
 
     var feeds = await db.Feeds.AsNoTracking()
-        .Where(f => f.IsVisible)
+        .Where(f => f.IsVisible && subscribedFeedIds.Contains(f.Id))
         .Select(f => new { f.Id, f.IsActive })
         .ToListAsync(ct);
     var snapshot = feeds.Select(f => new
@@ -1055,15 +1179,33 @@ app.MapGet("/api/feeds/stream", async (IFeedEventHub eventHub, DispatchDbContext
 
     await foreach (var evt in subscription)
     {
+        if (!subscribedFeedIds.Contains(evt.FeedId)) continue;
+
         var payload = JsonSerializer.Serialize(evt, jsonOptions);
         await context.Response.WriteAsync("event: updated\n", ct);
         await context.Response.WriteAsync($"data: {payload}\n\n", ct);
         await context.Response.Body.FlushAsync(ct);
     }
-});
+
+    return Results.Empty;
+}).RequireAuthorization();
 
 app.MapGet("/api/recordings/stream", async (Guid? feedId, DispatchDbContext db, IRecordingEventHub eventHub, HttpContext context, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    var subscribedFeedIds = (await db.UserFeedSubscriptions
+        .AsNoTracking()
+        .Where(s => s.UserId == userId.Value)
+        .Select(s => s.FeedId)
+        .ToListAsync(ct)).ToHashSet();
+
+    if (feedId.HasValue && !subscribedFeedIds.Contains(feedId.Value))
+    {
+        return Results.NotFound();
+    }
+
     var subscription = eventHub.Subscribe(ct);
 
     context.Response.Headers.CacheControl = "no-cache";
@@ -1096,10 +1238,8 @@ app.MapGet("/api/recordings/stream", async (Guid? feedId, DispatchDbContext db, 
 
     await foreach (var evt in subscription)
     {
-        if (feedId.HasValue && evt.FeedId != feedId.Value)
-        {
-            continue;
-        }
+        if (!subscribedFeedIds.Contains(evt.FeedId)) continue;
+        if (feedId.HasValue && evt.FeedId != feedId.Value) continue;
 
         var payload = JsonSerializer.Serialize(evt, jsonOptions);
         var eventName = evt.Type.ToString().ToLowerInvariant();
@@ -1107,7 +1247,135 @@ app.MapGet("/api/recordings/stream", async (Guid? feedId, DispatchDbContext db, 
         await context.Response.WriteAsync($"data: {payload}\n\n", ct);
         await context.Response.Body.FlushAsync(ct);
     }
-});
+
+    return Results.Empty;
+}).RequireAuthorization();
+
+// Auth endpoints
+app.MapPost("/api/auth/register", async (RegisterRequest request, UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
+    {
+        return Results.BadRequest(new { message = "Email and password are required." });
+    }
+
+    var user = new ApplicationUser
+    {
+        Id = Guid.NewGuid(),
+        UserName = request.Email.Trim().ToLowerInvariant(),
+        Email = request.Email.Trim(),
+        CreatedUtc = DateTime.UtcNow
+    };
+
+    var result = await userManager.CreateAsync(user, request.Password);
+    if (!result.Succeeded)
+    {
+        var errors = string.Join("; ", result.Errors.Select(e => e.Description));
+        return Results.BadRequest(new { message = errors });
+    }
+
+    await signInManager.SignInAsync(user, isPersistent: true);
+    return Results.Ok(new UserDto(user.Id, user.Email!));
+}).AllowAnonymous();
+
+app.MapPost("/api/auth/login", async (LoginRequest request, SignInManager<ApplicationUser> signInManager, UserManager<ApplicationUser> userManager) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
+    {
+        return Results.BadRequest(new { message = "Email and password are required." });
+    }
+
+    var result = await signInManager.PasswordSignInAsync(
+        request.Email.Trim().ToLowerInvariant(),
+        request.Password,
+        isPersistent: true,
+        lockoutOnFailure: false);
+
+    if (!result.Succeeded)
+    {
+        return Results.Unauthorized();
+    }
+
+    var user = await userManager.FindByEmailAsync(request.Email.Trim());
+    return Results.Ok(new UserDto(user!.Id, user.Email!));
+}).AllowAnonymous();
+
+app.MapGet("/api/auth/logout", async (SignInManager<ApplicationUser> signInManager) =>
+{
+    await signInManager.SignOutAsync();
+    return Results.Redirect("/login.html");
+}).AllowAnonymous();
+
+app.MapGet("/api/auth/me", async (HttpContext context, UserManager<ApplicationUser> userManager) =>
+{
+    var user = await userManager.GetUserAsync(context.User);
+    if (user == null) return Results.Unauthorized();
+    return Results.Ok(new UserDto(user.Id, user.Email!));
+}).RequireAuthorization();
+
+// Subscription endpoints
+app.MapGet("/api/feeds/catalog", async (DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
+{
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    var subscribedFeedIds = (await db.UserFeedSubscriptions
+        .AsNoTracking()
+        .Where(s => s.UserId == userId.Value)
+        .Select(s => s.FeedId)
+        .ToListAsync(ct)).ToHashSet();
+
+    var feeds = await db.Feeds.AsNoTracking()
+        .Where(f => f.IsVisible)
+        .OrderBy(f => f.Name)
+        .ToListAsync(ct);
+
+    var response = feeds.Select(f => new FeedWithSubscriptionDto(
+        f.Id,
+        f.Name,
+        f.BroadcastifyUrl,
+        f.StreamUrl,
+        f.FeedIdentifier,
+        f.IsActive,
+        coordinator.IsRunning(f.Id),
+        AsUtc(f.CreatedUtc),
+        f.LastStartedUtc.HasValue ? AsUtc(f.LastStartedUtc.Value) : null,
+        f.LastStoppedUtc.HasValue ? AsUtc(f.LastStoppedUtc.Value) : null,
+        subscribedFeedIds.Contains(f.Id)));
+
+    return Results.Ok(response);
+}).RequireAuthorization();
+
+app.MapPost("/api/feeds/{id:guid}/subscribe", async (Guid id, DispatchDbContext db, HttpContext context, CancellationToken ct) =>
+{
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    var feedExists = await db.Feeds.AsNoTracking().AnyAsync(f => f.Id == id && f.IsVisible, ct);
+    if (!feedExists) return Results.NotFound();
+
+    await EnsureSubscriptionAsync(db, userId.Value, id);
+    await db.SaveChangesAsync(ct);
+
+    return Results.Ok();
+}).RequireAuthorization();
+
+app.MapDelete("/api/feeds/{id:guid}/subscribe", async (Guid id, DispatchDbContext db, HttpContext context, CancellationToken ct) =>
+{
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    var subscription = await db.UserFeedSubscriptions
+        .FirstOrDefaultAsync(s => s.UserId == userId.Value && s.FeedId == id, ct);
+
+    if (subscription != null)
+    {
+        db.UserFeedSubscriptions.Remove(subscription);
+        await db.SaveChangesAsync(ct);
+    }
+
+    return Results.Ok();
+}).RequireAuthorization();
 
 app.MapFallbackToFile("index.html");
 
