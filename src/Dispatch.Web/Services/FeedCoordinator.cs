@@ -22,28 +22,35 @@ public class FeedCoordinator
 
     public Task<bool> StartAsync(Feed feed, CancellationToken cancellationToken, bool? isActive = null)
     {
-        if (_workers.ContainsKey(feed.Id))
-        {
-            return Task.FromResult(false);
-        }
+        // Use a standalone CTS so the feed worker's lifetime is NOT tied to the
+        // caller's token (which may be an HTTP request token that cancels on response).
+        var cts = new CancellationTokenSource();
+        // Use a placeholder task; we'll swap it after TryAdd succeeds.
+        var worker = new FeedWorker(cts, Task.CompletedTask);
 
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var worker = new FeedWorker(cts, Task.Run(() => _recorder.RunAsync(feed, cts.Token), cts.Token));
         if (!_workers.TryAdd(feed.Id, worker))
         {
-            cts.Cancel();
+            cts.Dispose();
             return Task.FromResult(false);
         }
 
-        _ = worker.Task.ContinueWith(task =>
+        // Now launch the actual work — the dictionary entry is already reserved.
+        var task = Task.Run(() => _recorder.RunAsync(feed, cts.Token), CancellationToken.None);
+        _workers[feed.Id] = worker with { Task = task };
+
+        _ = task.ContinueWith(_ =>
         {
-            _workers.TryRemove(feed.Id, out _);
+            if (_workers.TryRemove(feed.Id, out var removed))
+            {
+                removed.Cancellation.Dispose();
+            }
             _ = _eventHub.PublishAsync(new FeedStatusEvent(feed.Id, false, null));
             if (task.Exception != null)
             {
                 _logger.LogError(task.Exception, "Feed worker for {FeedId} crashed.", feed.FeedIdentifier);
             }
         }, TaskScheduler.Default);
+
         _ = _eventHub.PublishAsync(new FeedStatusEvent(feed.Id, true, isActive));
         return Task.FromResult(true);
     }
@@ -61,6 +68,7 @@ public class FeedCoordinator
             {
                 // Ignore cancellation/timeout
             }
+            worker.Cancellation.Dispose();
         }
 
         await _eventHub.PublishAsync(new FeedStatusEvent(feedId, false, isActive));
@@ -70,6 +78,7 @@ public class FeedCoordinator
     {
         foreach (var feed in feeds)
         {
+            if (cancellationToken.IsCancellationRequested) break;
             await StartAsync(feed, cancellationToken, feed.IsActive);
         }
     }

@@ -59,17 +59,20 @@ let selectedFeedId = null;
 let refreshEnabled = true;
 let refreshIntervalMs = DEFAULT_REFRESH_MS;
 let showArchived = false;
+let isAdmin = false;
+let heartbeatInterval = null;
 let contextMenu = null;
 let contextRecordingId = null;
 let recordingsInitialized = false;
 let latestRecordingStart = null;
 let oldestRecordingStart = null;
-let canLoadOlderRecordings = false;
 let recordingsPageLoading = false;
 let preloadToken = 0;
 let eventSource = null;
 let feedEventSource = null;
 let progressTimer = null;
+let sseFailCount = 0;
+const SSE_MAX_FAILURES = 5;
 let streamSyncInFlight = false;
 let uiConfig = {
   expectedRealtimeFactor: 0.7,
@@ -671,7 +674,7 @@ function hideContextMenu() {
 }
 
 async function loadActiveFeeds() {
-  const feeds = await fetchJson("/api/feeds");
+  const feeds = (await fetchJson("/api/feeds/active")) ?? [];
   renderActiveFeeds(feeds);
   updateActiveStatus(feeds);
 }
@@ -913,6 +916,7 @@ function createActiveFeedCard(feed) {
     listenToggle.type = "button";
   }
   toggle.type = "button";
+  toggle.hidden = !isAdmin;
   remove.type = "button";
 
   if (listenToggle) {
@@ -971,7 +975,7 @@ function createActiveFeedCard(feed) {
         return;
       }
 
-      await fetchJson(`/api/feeds/${currentFeed.id}`, { method: "DELETE" });
+      await fetchJson(`/api/feeds/${currentFeed.id}/activate`, { method: "DELETE" });
       stopFeedListen(entry);
       activeFeedNodes.delete(toFeedKey(currentFeed.id));
       card.remove();
@@ -1066,7 +1070,7 @@ function resetRecordingView() {
   recordingsInitialized = false;
   latestRecordingStart = null;
   oldestRecordingStart = null;
-  canLoadOlderRecordings = false;
+
   recordingsPageLoading = false;
   recordingNodes.clear();
   recordingDayNodes.clear();
@@ -1157,7 +1161,7 @@ async function loadInitialRecordingsPage() {
       recordingsInitialized = true;
       latestRecordingStart = new Date().toISOString();
       oldestRecordingStart = null;
-      canLoadOlderRecordings = false;
+    
       return;
     }
 
@@ -1219,7 +1223,7 @@ async function loadInitialRecordingsPage() {
     }
 
     recordingsInitialized = true;
-    canLoadOlderRecordings = false;
+  
   } finally {
     recordingsPageLoading = false;
   }
@@ -1414,6 +1418,7 @@ function connectRecordingStream() {
   };
 
   eventSource.addEventListener("open", () => {
+    sseFailCount = 0;
     syncSelectedFeedFromApi().catch((error) => console.error(error));
   });
 
@@ -1438,14 +1443,16 @@ function connectRecordingStream() {
   eventSource.addEventListener("updated", handleEvent("updated"));
   eventSource.addEventListener("archived", handleEvent("archived"));
   eventSource.onerror = () => {
-    if (!refreshEnabled) {
+    sseFailCount++;
+    if (sseFailCount >= SSE_MAX_FAILURES) {
+      // Likely session expired — redirect to login
+      window.location.href = "/login.html";
       return;
     }
+    if (!refreshEnabled) return;
     disconnectRecordingStream();
     setTimeout(() => {
-      if (refreshEnabled) {
-        connectRecordingStream();
-      }
+      if (refreshEnabled) connectRecordingStream();
     }, 1000);
   };
 }
@@ -1465,6 +1472,7 @@ function connectFeedStream() {
   }
 
   feedEventSource = new EventSource("/api/feeds/stream");
+  feedEventSource.addEventListener("open", () => { sseFailCount = 0; });
   feedEventSource.addEventListener("snapshot", (event) => {
     try {
       const payload = JSON.parse(event.data);
@@ -1523,14 +1531,15 @@ function connectFeedStream() {
     }
   });
   feedEventSource.onerror = () => {
-    if (!refreshEnabled) {
+    sseFailCount++;
+    if (sseFailCount >= SSE_MAX_FAILURES) {
+      window.location.href = "/login.html";
       return;
     }
+    if (!refreshEnabled) return;
     disconnectFeedStream();
     setTimeout(() => {
-      if (refreshEnabled) {
-        connectFeedStream();
-      }
+      if (refreshEnabled) connectFeedStream();
     }, 1000);
   };
 }
@@ -1540,6 +1549,29 @@ function disconnectFeedStream() {
     feedEventSource.close();
     feedEventSource = null;
   }
+}
+
+async function sendHeartbeat() {
+  const feedIds = Array.from(activeFeedNodes.values())
+    .map((entry) => entry.feed?.id)
+    .filter(Boolean);
+  if (feedIds.length === 0) return;
+  try {
+    await fetchJson("/api/feeds/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feedIds })
+    });
+  } catch (err) {
+    console.error("Heartbeat failed:", err);
+  }
+}
+
+function startHeartbeat() {
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  // Fire immediately to restore session feeds, then every 2 minutes
+  sendHeartbeat();
+  heartbeatInterval = setInterval(sendHeartbeat, 2 * 60 * 1000);
 }
 
 function removeRecordingNode(recordingId) {
@@ -1580,85 +1612,7 @@ function removeRecordingNode(recordingId) {
   }
 }
 
-function renderRecordings(recordings) {
-  const dayScrollStates = captureDayScrollStates();
 
-  if (!recordings.length) {
-    recordingsContainer.innerHTML = "<p class=\"muted\">No recordings yet.</p>";
-    recordingDayNodes.clear();
-    recordingNodes.clear();
-    recordingsInitialized = true;
-    return;
-  }
-
-  const todayKey = toDateKey(new Date());
-  const groups = new Map();
-
-  recordings.forEach((recording) => {
-    const key = toDateKey(new Date(recording.startUtc));
-    if (!groups.has(key)) {
-      groups.set(key, []);
-    }
-    groups.get(key).push(recording);
-  });
-
-  const orderedKeys = Array.from(groups.keys()).sort((a, b) => (a < b ? 1 : -1));
-  const seenDayKeys = new Set(orderedKeys);
-
-  orderedKeys.forEach((key) => {
-    const recordingsForDay = groups.get(key) || [];
-    const dayEntry = ensureDayEntry(key, todayKey);
-
-    const label = key === todayKey ? "Today" : formatDateLabel(key);
-    dayEntry.label.textContent = label;
-    updateDayCount(key, dayEntry);
-
-    const desiredIds = recordingsForDay.map((recording) => recording.id);
-    const desiredSet = new Set(desiredIds);
-
-    recordingsForDay.forEach((recording) => {
-      const isNew = !recordingNodes.has(recording.id);
-      const shouldHighlight = isNew && shouldHighlightRecording(recording);
-      const node = getRecordingNode(recording, shouldHighlight);
-      dayEntry.list.appendChild(node.root);
-    });
-
-    Array.from(dayEntry.list.children).forEach((child) => {
-      const recordingId = child.dataset?.recordingId;
-      if (recordingId && !desiredSet.has(recordingId)) {
-        const existing = recordingNodes.get(recordingId);
-        if (existing) {
-          recordingNodes.delete(recordingId);
-        }
-        child.remove();
-      }
-    });
-
-  });
-
-  for (const [key, entry] of recordingDayNodes.entries()) {
-    if (!seenDayKeys.has(key)) {
-      entry.root.remove();
-      recordingDayNodes.delete(key);
-      recordingDayTotals.delete(key);
-    }
-  }
-
-  orderedKeys.forEach((key) => {
-    const entry = recordingDayNodes.get(key);
-    if (entry) {
-      recordingsContainer.appendChild(entry.root);
-    }
-  });
-
-  recordingsInitialized = true;
-
-  if (dayScrollStates.size > 0) {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => restoreDayScrollStates(dayScrollStates));
-    });
-  }
-}
 
 function ensureDayEntry(key, todayKey) {
   let dayEntry = recordingDayNodes.get(key);
@@ -1702,6 +1656,7 @@ function ensureDayEntry(key, todayKey) {
     });
   }
 
+  dayArchive.hidden = !isAdmin;
   dayArchive.addEventListener("click", async (event) => {
     event.stopPropagation();
     await archiveDay(key);
@@ -1919,6 +1874,7 @@ function getRecordingNode(recording, shouldHighlight) {
       hasTranscript: false
     };
     node.audio.preload = "none";
+    node.archiveToggle.hidden = !isAdmin;
     node.transcriptToggle.addEventListener("click", (event) => {
       event.stopPropagation();
       toggleTranscript(node);
@@ -1984,7 +1940,7 @@ function updateRecordingNode(node, rec) {
   node.transcriptStartedUtc = rec.transcriptStartedUtc;
   node.durationSeconds = rec.durationSeconds;
   const start = new Date(rec.startUtc);
-  node.time.textContent = start.toLocaleString();
+  node.time.textContent = start.toLocaleTimeString();
   const showStatus = rec.transcriptStatus !== "Complete";
   node.badge.textContent = showStatus ? rec.transcriptStatus : "";
   node.badge.hidden = !showStatus;
@@ -2093,8 +2049,9 @@ async function addFeedFromDiscovery(payload) {
     throw new Error("Invalid feed selection.");
   }
 
-  const feeds = await fetchJson("/api/feeds");
-  const existing = feeds.find((feed) => String(feed.feedIdentifier) === requestedFeedId);
+  // Check catalog (all feeds, not just subscribed) for existing feed
+  const catalog = await fetchJson("/api/feeds/catalog");
+  const existing = catalog.find((feed) => String(feed.feedIdentifier) === requestedFeedId);
 
   let targetFeed = existing;
   if (!existing) {
@@ -2108,13 +2065,15 @@ async function addFeedFromDiscovery(payload) {
     });
   }
 
-  try {
-    if (targetFeed) {
-      await fetchJson(`/api/feeds/${targetFeed.id}/start`, { method: "POST" });
-    }
-  } finally {
-    await loadActiveFeeds();
+  if (!targetFeed?.id) return;
+
+  const result = await fetchJson(`/api/feeds/${targetFeed.id}/activate`, { method: "POST" });
+  if (result?.adminStopped) {
+    alert(result.message || "This feed has been disabled by an admin.");
+    return;
   }
+
+  await loadActiveFeeds();
 }
 
 function setupDragAndDrop() {
@@ -2135,7 +2094,13 @@ function setupDragAndDrop() {
       return;
     }
 
-    const payload = JSON.parse(raw);
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      console.error("Invalid drag data:", raw);
+      return;
+    }
     try {
       await addFeedFromDiscovery(payload);
     } catch (error) {
@@ -2206,16 +2171,24 @@ refreshIntervalInput.addEventListener("change", applyRefreshSettings);
 refreshIntervalInput.addEventListener("blur", applyRefreshSettings);
   showArchivedToggle.addEventListener("change", applyArchiveSettings);
 
-document.getElementById("sign-out-btn")?.addEventListener("click", () => {
-  window.location.href = "/api/auth/logout";
+document.getElementById("sign-out-btn")?.addEventListener("click", async () => {
+  // Clean up SSE connections and heartbeat before sign-out
+  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  disconnectFeedStream();
+  disconnectRecordingStream();
+  await fetch("/api/auth/logout", { method: "POST" });
+  window.location.href = "/login.html";
 });
 
 (async () => {
   try {
     const user = await fetchJson("/api/auth/me");
     if (!user) return; // fetchJson already redirected on 401
+    isAdmin = user.isAdmin === true;
     const emailEl = document.getElementById("user-email");
     if (emailEl) emailEl.textContent = user.email;
+    const adminBadge = document.getElementById("admin-badge");
+    if (adminBadge) adminBadge.hidden = !isAdmin;
   } catch {
     window.location.href = "/login.html";
     return;
@@ -2225,7 +2198,9 @@ document.getElementById("sign-out-btn")?.addEventListener("click", () => {
   setupDragAndDrop();
   loadUiConfig();
   loadStates().catch((err) => console.error(err));
-  loadActiveFeeds().catch((err) => console.error(err));
+  // Load active feeds first, then start heartbeat (which auto-restarts stopped session feeds)
+  await loadActiveFeeds().catch((err) => console.error(err));
+  startHeartbeat();
   loadRefreshSettings();
   loadArchiveSettings();
   restartAutoRefresh();

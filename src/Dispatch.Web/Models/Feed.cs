@@ -23,6 +23,8 @@ public class Feed
 
     public bool IsActive { get; set; }
 
+    public bool AdminStopped { get; set; }
+
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
 
     public DateTime? LastStartedUtc { get; set; }
@@ -32,4 +34,6 @@ public class Feed
     public ICollection<Recording> Recordings { get; set; } = new List<Recording>();
 
     public ICollection<UserFeedSubscription> Subscriptions { get; set; } = new List<UserFeedSubscription>();
+
+    public ICollection<UserActiveFeed> ActiveUsers { get; set; } = new List<UserActiveFeed>();
 }

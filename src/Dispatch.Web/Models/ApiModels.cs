@@ -13,6 +13,7 @@ public record FeedDto(
     string StreamUrl,
     string FeedIdentifier,
     bool IsActive,
+    bool AdminStopped,
     bool IsRunning,
     DateTime CreatedUtc,
     DateTime? LastStartedUtc,
@@ -82,7 +83,7 @@ public record RegisterRequest(string Email, string Password);
 
 public record LoginRequest(string Email, string Password);
 
-public record UserDto(Guid Id, string Email);
+public record UserDto(Guid Id, string Email, bool IsAdmin);
 
 public record FeedWithSubscriptionDto(
     Guid Id,
@@ -91,8 +92,11 @@ public record FeedWithSubscriptionDto(
     string StreamUrl,
     string FeedIdentifier,
     bool IsActive,
+    bool AdminStopped,
     bool IsRunning,
     DateTime CreatedUtc,
     DateTime? LastStartedUtc,
     DateTime? LastStoppedUtc,
     bool IsSubscribed);
+
+public record HeartbeatRequest(IReadOnlyList<Guid> FeedIds);

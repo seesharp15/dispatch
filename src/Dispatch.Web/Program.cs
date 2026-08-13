@@ -155,6 +155,38 @@ async Task EnsureSubscriptionAsync(DispatchDbContext db, Guid userId, Guid feedI
     }
 }
 
+async Task DeactivateUserFeeds(Guid userId, DispatchDbContext db, FeedCoordinator coordinator, CancellationToken ct)
+{
+    var records = await db.UserActiveFeeds
+        .Where(u => u.UserId == userId)
+        .ToListAsync(ct);
+
+    if (records.Count == 0) return;
+
+    // Mark heartbeats as stale so the cleanup worker (and logout) treat this user as inactive.
+    // Records are kept so the canvas repopulates on next login.
+    foreach (var r in records)
+        r.LastHeartbeatUtc = DateTime.MinValue;
+    await db.SaveChangesAsync(ct);
+
+    var cutoff = DateTime.UtcNow.AddMinutes(-5);
+    var feedIds = records.Select(u => u.FeedId).Distinct().ToList();
+    foreach (var feedId in feedIds)
+    {
+        var feed = await db.Feeds.AsNoTracking().FirstOrDefaultAsync(f => f.Id == feedId, ct);
+        if (feed == null || feed.IsActive) continue;
+
+        var hasActiveUsers = await db.UserActiveFeeds
+            .AnyAsync(u => u.FeedId == feedId && u.LastHeartbeatUtc > cutoff, ct);
+        if (hasActiveUsers) continue;
+
+        if (coordinator.IsRunning(feedId))
+        {
+            await coordinator.StopAsync(feedId);
+        }
+    }
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 string ResolvePath(string basePath, string path)
@@ -245,6 +277,7 @@ builder.Services.AddHttpClient("stream")
         client.DefaultRequestHeaders.UserAgent.ParseAdd("DispatchFeedMonitor/1.0");
     });
 
+builder.Services.AddSingleton<ChildProcessRegistry>();
 builder.Services.AddSingleton<BroadcastifyResolver>();
 builder.Services.AddSingleton<ILocalAudioFeedProvider, LocalAudioFeedProvider>();
 builder.Services.AddSingleton<IRecordingEventHub, RecordingEventHub>();
@@ -269,8 +302,13 @@ builder.Services.AddSingleton<ITranscriber>(sp =>
 builder.Services.AddSingleton<WhisperCliTranscriber>();
 builder.Services.AddHostedService<TranscriptionWorker>();
 builder.Services.AddHostedService<FeedStartupWorker>();
+builder.Services.AddHostedService<FeedSessionCleanupWorker>();
 
 var app = builder.Build();
+
+var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+var processRegistry = app.Services.GetRequiredService<ChildProcessRegistry>();
+lifetime.ApplicationStopping.Register(() => processRegistry.KillAll());
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -325,6 +363,24 @@ using (var scope = app.Services.CreateScope())
     {
         db.Database.ExecuteSqlRaw("ALTER TABLE Feeds ADD COLUMN IsVisible INTEGER NOT NULL DEFAULT 1;");
     }
+
+    if (!feedColumns.Contains("AdminStopped"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE Feeds ADD COLUMN AdminStopped INTEGER NOT NULL DEFAULT 0;");
+    }
+
+    db.Database.ExecuteSqlRaw(@"
+        CREATE TABLE IF NOT EXISTS UserActiveFeeds (
+            Id TEXT NOT NULL PRIMARY KEY,
+            UserId TEXT NOT NULL,
+            FeedId TEXT NOT NULL,
+            LastHeartbeatUtc TEXT NOT NULL,
+            FOREIGN KEY (UserId) REFERENCES AspNetUsers(Id) ON DELETE CASCADE,
+            FOREIGN KEY (FeedId) REFERENCES Feeds(Id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS IX_UserActiveFeeds_UserId_FeedId ON UserActiveFeeds(UserId, FeedId);
+        CREATE INDEX IF NOT EXISTS IX_UserActiveFeeds_FeedId ON UserActiveFeeds(FeedId);
+    ");
 }
 
 app.MapGet("/api/discovery/states", (IOptions<DiscoveryBroadcastifyOptions> options) =>
@@ -385,10 +441,71 @@ app.MapGet("/api/feeds", async (DispatchDbContext db, FeedCoordinator coordinato
         feed.StreamUrl,
         feed.FeedIdentifier,
         feed.IsActive,
+        feed.AdminStopped,
         coordinator.IsRunning(feed.Id),
         AsUtc(feed.CreatedUtc),
         feed.LastStartedUtc.HasValue ? AsUtc(feed.LastStartedUtc.Value) : null,
         feed.LastStoppedUtc.HasValue ? AsUtc(feed.LastStoppedUtc.Value) : null));
+
+    return Results.Ok(response);
+}).RequireAuthorization();
+
+app.MapGet("/api/feeds/active", async (DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, UserManager<ApplicationUser> userManager, CancellationToken ct) =>
+{
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    var user = await userManager.GetUserAsync(context.User);
+    var isAdminActive = user != null && await userManager.IsInRoleAsync(user, "Admin");
+
+    // Read-only: return the user's canvas feeds + (for admins) all other running feeds.
+    // No heartbeat writes or auto-restarts here — those happen in heartbeat and activate endpoints.
+    List<Feed> feeds;
+    if (isAdminActive)
+    {
+        // Admin's own canvas feeds
+        var adminFeedIdList = await db.UserActiveFeeds.AsNoTracking()
+            .Where(u => u.UserId == userId.Value)
+            .Select(u => u.FeedId)
+            .ToListAsync(ct);
+        var adminFeedIdSet = adminFeedIdList.ToHashSet();
+
+        var adminCanvasFeeds = adminFeedIdList.Count > 0
+            ? await db.Feeds.AsNoTracking().Where(f => f.IsVisible && adminFeedIdList.Contains(f.Id)).ToListAsync(ct)
+            : new List<Feed>();
+
+        // Also include all other currently running feeds not already in admin's canvas
+        var allVisibleFeeds = await db.Feeds.AsNoTracking().Where(f => f.IsVisible).ToListAsync(ct);
+        var otherRunningFeeds = allVisibleFeeds.Where(f => coordinator.IsRunning(f.Id) && !adminFeedIdSet.Contains(f.Id)).ToList();
+
+        feeds = adminCanvasFeeds.Concat(otherRunningFeeds).ToList();
+    }
+    else
+    {
+        var activeFeedIds = await db.UserActiveFeeds.AsNoTracking()
+            .Where(u => u.UserId == userId.Value)
+            .Select(u => u.FeedId)
+            .ToListAsync(ct);
+
+        if (activeFeedIds.Count == 0) return Results.Ok(Array.Empty<FeedDto>());
+
+        feeds = await db.Feeds.AsNoTracking()
+            .Where(f => f.IsVisible && activeFeedIds.Contains(f.Id))
+            .ToListAsync(ct);
+    }
+
+    var response = feeds.Select(f => new FeedDto(
+        f.Id,
+        f.Name,
+        f.BroadcastifyUrl,
+        f.StreamUrl,
+        f.FeedIdentifier,
+        f.IsActive,
+        f.AdminStopped,
+        coordinator.IsRunning(f.Id),
+        AsUtc(f.CreatedUtc),
+        f.LastStartedUtc.HasValue ? AsUtc(f.LastStartedUtc.Value) : null,
+        f.LastStoppedUtc.HasValue ? AsUtc(f.LastStoppedUtc.Value) : null));
 
     return Results.Ok(response);
 }).RequireAuthorization();
@@ -421,6 +538,7 @@ app.MapPost("/api/feeds", async (AddFeedRequest request, DispatchDbContext db, B
             existingFeed.StreamUrl,
             existingFeed.FeedIdentifier,
             existingFeed.IsActive,
+            existingFeed.AdminStopped,
             false,
             AsUtc(existingFeed.CreatedUtc),
             existingFeed.LastStartedUtc.HasValue ? AsUtc(existingFeed.LastStartedUtc.Value) : null,
@@ -450,6 +568,7 @@ app.MapPost("/api/feeds", async (AddFeedRequest request, DispatchDbContext db, B
         feed.StreamUrl,
         feed.FeedIdentifier,
         feed.IsActive,
+        feed.AdminStopped,
         false,
         feed.CreatedUtc,
         feed.LastStartedUtc,
@@ -541,6 +660,7 @@ app.MapPost("/api/feeds/local", async (AddLocalFeedRequest request, DispatchDbCo
         targetFeed.StreamUrl,
         targetFeed.FeedIdentifier,
         targetFeed.IsActive,
+        targetFeed.AdminStopped,
         coordinator.IsRunning(targetFeed.Id),
         AsUtc(targetFeed.CreatedUtc),
         targetFeed.LastStartedUtc.HasValue ? AsUtc(targetFeed.LastStartedUtc.Value) : null,
@@ -551,34 +671,161 @@ app.MapPost("/api/feeds/{id:guid}/start", async (Guid id, DispatchDbContext db, 
 {
     var userId = GetUserId(context);
     if (userId == null) return Results.Unauthorized();
-    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
 
+    // Admin can start any visible feed — no subscription required
     var feed = await db.Feeds.FirstOrDefaultAsync(f => f.Id == id && f.IsVisible, ct);
     if (feed == null) return Results.NotFound();
 
     feed.IsActive = true;
+    feed.AdminStopped = false;
     feed.LastStartedUtc = DateTime.UtcNow;
     await db.SaveChangesAsync(ct);
 
     await coordinator.StartAsync(feed, ct, feed.IsActive);
 
     return Results.Ok();
-}).RequireAuthorization();
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
 app.MapPost("/api/feeds/{id:guid}/stop", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
     var userId = GetUserId(context);
     if (userId == null) return Results.Unauthorized();
-    if (!await UserIsSubscribedAsync(db, userId.Value, id, ct)) return Results.NotFound();
 
+    // Admin can stop any visible feed — no subscription required
     var feed = await db.Feeds.FirstOrDefaultAsync(f => f.Id == id && f.IsVisible, ct);
     if (feed == null) return Results.NotFound();
 
     feed.IsActive = false;
+    feed.AdminStopped = true;
     feed.LastStoppedUtc = DateTime.UtcNow;
     await db.SaveChangesAsync(ct);
 
     await coordinator.StopAsync(feed.Id, feed.IsActive);
+
+    return Results.Ok();
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
+
+app.MapPost("/api/feeds/{id:guid}/activate", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
+{
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    var feed = await db.Feeds.FirstOrDefaultAsync(f => f.Id == id && f.IsVisible, ct);
+    if (feed == null) return Results.NotFound();
+
+    if (feed.AdminStopped)
+    {
+        return Results.Ok(new { adminStopped = true, message = "This feed has been disabled by an admin." });
+    }
+
+    // Auto-subscribe so the user gets events for this feed
+    await EnsureSubscriptionAsync(db, userId.Value, id);
+
+    // Upsert UserActiveFeed
+    var existing = await db.UserActiveFeeds
+        .FirstOrDefaultAsync(u => u.UserId == userId.Value && u.FeedId == id, ct);
+
+    if (existing == null)
+    {
+        db.UserActiveFeeds.Add(new UserActiveFeed
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId.Value,
+            FeedId = id,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+    }
+    else
+    {
+        existing.LastHeartbeatUtc = DateTime.UtcNow;
+    }
+
+    await db.SaveChangesAsync(ct);
+
+    // Auto-start feed if not already running
+    if (!coordinator.IsRunning(id))
+    {
+        await coordinator.StartAsync(feed, ct, feed.IsActive);
+    }
+
+    return Results.Ok(new FeedDto(
+        feed.Id,
+        feed.Name,
+        feed.BroadcastifyUrl,
+        feed.StreamUrl,
+        feed.FeedIdentifier,
+        feed.IsActive,
+        feed.AdminStopped,
+        coordinator.IsRunning(feed.Id),
+        AsUtc(feed.CreatedUtc),
+        feed.LastStartedUtc.HasValue ? AsUtc(feed.LastStartedUtc.Value) : null,
+        feed.LastStoppedUtc.HasValue ? AsUtc(feed.LastStoppedUtc.Value) : null));
+}).RequireAuthorization();
+
+app.MapDelete("/api/feeds/{id:guid}/activate", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
+{
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    var record = await db.UserActiveFeeds
+        .FirstOrDefaultAsync(u => u.UserId == userId.Value && u.FeedId == id, ct);
+
+    if (record != null)
+    {
+        db.UserActiveFeeds.Remove(record);
+        await db.SaveChangesAsync(ct);
+    }
+
+    // Stop feed if no active listeners remain (ignore stale heartbeats) and admin hasn't pinned it
+    var heartbeatCutoff = DateTime.UtcNow.AddMinutes(-5);
+    var hasActiveUsers = await db.UserActiveFeeds.AnyAsync(u => u.FeedId == id && u.LastHeartbeatUtc > heartbeatCutoff, ct);
+    if (!hasActiveUsers)
+    {
+        var feed = await db.Feeds.AsNoTracking().FirstOrDefaultAsync(f => f.Id == id, ct);
+        if (feed != null && !feed.IsActive && coordinator.IsRunning(id))
+        {
+            await coordinator.StopAsync(id);
+        }
+    }
+
+    return Results.Ok();
+}).RequireAuthorization();
+
+app.MapPost("/api/feeds/heartbeat", async (HeartbeatRequest request, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
+{
+    var userId = GetUserId(context);
+    if (userId == null) return Results.Unauthorized();
+
+    if (request.FeedIds == null || request.FeedIds.Count == 0) return Results.Ok();
+
+    var records = await db.UserActiveFeeds
+        .Where(u => u.UserId == userId.Value && request.FeedIds.Contains(u.FeedId))
+        .ToListAsync(ct);
+
+    var now = DateTime.UtcNow;
+    foreach (var record in records)
+    {
+        record.LastHeartbeatUtc = now;
+    }
+
+    if (records.Count > 0)
+    {
+        await db.SaveChangesAsync(ct);
+    }
+
+    // Auto-restart any canvas feeds that stopped (e.g. server restart, session restore)
+    var heartbeatFeedIds = records.Select(r => r.FeedId).ToList();
+    if (heartbeatFeedIds.Count > 0)
+    {
+        var feedsToRestart = await db.Feeds.AsNoTracking()
+            .Where(f => f.IsVisible && !f.AdminStopped && heartbeatFeedIds.Contains(f.Id))
+            .ToListAsync(ct);
+
+        foreach (var feed in feedsToRestart.Where(f => !coordinator.IsRunning(f.Id)))
+        {
+            await coordinator.StartAsync(feed, ct, feed.IsActive);
+        }
+    }
 
     return Results.Ok();
 }).RequireAuthorization();
@@ -731,7 +978,7 @@ app.MapDelete("/api/feeds/{id:guid}", async (Guid id, DispatchDbContext db, Feed
     await coordinator.StopAsync(feed.Id, feed.IsActive);
 
     return Results.Ok();
-}).RequireAuthorization();
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
 app.MapGet("/api/feeds/{id:guid}/recordings/days", async (Guid id, bool includeArchived, DispatchDbContext db, HttpContext context, CancellationToken ct) =>
 {
@@ -1070,7 +1317,7 @@ app.MapPost("/api/recordings/{id:guid}/archive", async (Guid id, DispatchDbConte
     }
 
     return Results.Ok();
-}).RequireAuthorization();
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
 app.MapPost("/api/feeds/{id:guid}/recordings/archive", async (Guid id, string day, DispatchDbContext db, IRecordingEventHub eventHub, HttpContext context, CancellationToken ct) =>
 {
@@ -1111,7 +1358,7 @@ app.MapPost("/api/feeds/{id:guid}/recordings/archive", async (Guid id, string da
         await eventHub.PublishAsync(new RecordingEvent(recording.Id, recording.FeedId, RecordingEventType.Archived));
     }
     return Results.Ok(new { archived = recordings.Count });
-}).RequireAuthorization();
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
 app.MapGet("/api/stream", async (string url, BroadcastifyResolver resolver, IHttpClientFactory httpClientFactory, HttpContext context, CancellationToken ct) =>
 {
@@ -1275,7 +1522,8 @@ app.MapPost("/api/auth/register", async (RegisterRequest request, UserManager<Ap
     }
 
     await signInManager.SignInAsync(user, isPersistent: true);
-    return Results.Ok(new UserDto(user.Id, user.Email!));
+    var isAdminOnRegister = await userManager.IsInRoleAsync(user, "Admin");
+    return Results.Ok(new UserDto(user.Id, user.Email!, isAdminOnRegister));
 }).AllowAnonymous();
 
 app.MapPost("/api/auth/login", async (LoginRequest request, SignInManager<ApplicationUser> signInManager, UserManager<ApplicationUser> userManager) =>
@@ -1297,20 +1545,27 @@ app.MapPost("/api/auth/login", async (LoginRequest request, SignInManager<Applic
     }
 
     var user = await userManager.FindByEmailAsync(request.Email.Trim());
-    return Results.Ok(new UserDto(user!.Id, user.Email!));
+    var isAdminOnLogin = await userManager.IsInRoleAsync(user!, "Admin");
+    return Results.Ok(new UserDto(user!.Id, user.Email!, isAdminOnLogin));
 }).AllowAnonymous();
 
-app.MapGet("/api/auth/logout", async (SignInManager<ApplicationUser> signInManager) =>
+app.MapPost("/api/auth/logout", async (HttpContext context, SignInManager<ApplicationUser> signInManager, DispatchDbContext db, FeedCoordinator coordinator, CancellationToken ct) =>
 {
+    var userId = GetUserId(context);
+    if (userId != null)
+    {
+        await DeactivateUserFeeds(userId.Value, db, coordinator, ct);
+    }
     await signInManager.SignOutAsync();
-    return Results.Redirect("/login.html");
+    return Results.Ok();
 }).AllowAnonymous();
 
 app.MapGet("/api/auth/me", async (HttpContext context, UserManager<ApplicationUser> userManager) =>
 {
     var user = await userManager.GetUserAsync(context.User);
     if (user == null) return Results.Unauthorized();
-    return Results.Ok(new UserDto(user.Id, user.Email!));
+    var isAdminOnMe = await userManager.IsInRoleAsync(user, "Admin");
+    return Results.Ok(new UserDto(user.Id, user.Email!, isAdminOnMe));
 }).RequireAuthorization();
 
 // Subscription endpoints
@@ -1337,6 +1592,7 @@ app.MapGet("/api/feeds/catalog", async (DispatchDbContext db, FeedCoordinator co
         f.StreamUrl,
         f.FeedIdentifier,
         f.IsActive,
+        f.AdminStopped,
         coordinator.IsRunning(f.Id),
         AsUtc(f.CreatedUtc),
         f.LastStartedUtc.HasValue ? AsUtc(f.LastStartedUtc.Value) : null,

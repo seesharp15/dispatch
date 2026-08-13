@@ -1,4 +1,5 @@
 using Dispatch.Web.Data;
+using Dispatch.Web.Models;
 using Dispatch.Web.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -23,9 +24,25 @@ public class FeedStartupWorker : BackgroundService
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<DispatchDbContext>();
-            var feeds = await db.Feeds.Where(f => f.IsActive && f.IsVisible).ToListAsync(stoppingToken);
 
-            await _coordinator.StartActiveFeedsAsync(feeds, stoppingToken);
+            // Start admin-pinned feeds
+            var pinnedFeeds = await db.Feeds
+                .Where(f => f.IsVisible && f.IsActive && !f.AdminStopped)
+                .ToListAsync(stoppingToken);
+
+            // Also start feeds that have active user sessions (from before restart)
+            var userActiveFeedIds = await db.UserActiveFeeds
+                .Select(u => u.FeedId)
+                .Distinct()
+                .ToListAsync(stoppingToken);
+
+            var sessionFeeds = userActiveFeedIds.Count > 0
+                ? await db.Feeds
+                    .Where(f => f.IsVisible && !f.AdminStopped && !f.IsActive && userActiveFeedIds.Contains(f.Id))
+                    .ToListAsync(stoppingToken)
+                : new List<Feed>();
+
+            await _coordinator.StartActiveFeedsAsync(pinnedFeeds.Concat(sessionFeeds), stoppingToken);
         }
         catch (Exception ex)
         {

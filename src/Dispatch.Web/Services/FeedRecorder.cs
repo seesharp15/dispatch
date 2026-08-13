@@ -18,6 +18,7 @@ public class FeedRecorder
     private readonly DecoderOptions _decoderOptions;
     private readonly IHostEnvironment _hostEnvironment;
     private readonly IRecordingEventHub _eventHub;
+    private readonly ChildProcessRegistry _processRegistry;
 
     public FeedRecorder(
         IServiceScopeFactory scopeFactory,
@@ -27,6 +28,7 @@ public class FeedRecorder
         IOptions<DecoderOptions> decoderOptions,
         IHostEnvironment hostEnvironment,
         IRecordingEventHub eventHub,
+        ChildProcessRegistry processRegistry,
         ILogger<FeedRecorder> logger)
     {
         _scopeFactory = scopeFactory;
@@ -37,6 +39,7 @@ public class FeedRecorder
         _decoderOptions = decoderOptions.Value;
         _hostEnvironment = hostEnvironment;
         _eventHub = eventHub;
+        _processRegistry = processRegistry;
     }
 
     public async Task RunAsync(Feed feed, CancellationToken cancellationToken)
@@ -156,6 +159,7 @@ public class FeedRecorder
             await SaveRecordingAsync(feed, currentFilePath, segmentStartUtc, endUtc, segmentSeconds, cancellationToken);
         }
 
+        _processRegistry.Unregister(process);
         if (!process.HasExited)
         {
             process.Kill(entireProcessTree: true);
@@ -233,6 +237,7 @@ public class FeedRecorder
             throw new InvalidOperationException("Unable to start ffmpeg process.");
         }
 
+        _processRegistry.Register(process);
         return process;
     }
 
