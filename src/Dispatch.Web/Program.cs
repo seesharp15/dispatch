@@ -425,6 +425,25 @@ using (var scope = app.Services.CreateScope())
         CREATE UNIQUE INDEX IF NOT EXISTS IX_UserActiveFeeds_UserId_FeedId ON UserActiveFeeds(UserId, FeedId);
         CREATE INDEX IF NOT EXISTS IX_UserActiveFeeds_FeedId ON UserActiveFeeds(FeedId);
     ");
+
+    // Seed the Admin role, and — if configured — promote a bootstrap account to it.
+    // Without this, a fresh deployment has no way to become admin short of editing the DB by hand.
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+    if (!await roleManager.RoleExistsAsync("Admin"))
+    {
+        await roleManager.CreateAsync(new IdentityRole<Guid>("Admin"));
+    }
+
+    var bootstrapAdminEmail = app.Configuration["Bootstrap:AdminEmail"];
+    if (!string.IsNullOrWhiteSpace(bootstrapAdminEmail))
+    {
+        var bootstrapUserManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var bootstrapUser = await bootstrapUserManager.FindByEmailAsync(bootstrapAdminEmail.Trim());
+        if (bootstrapUser != null && !await bootstrapUserManager.IsInRoleAsync(bootstrapUser, "Admin"))
+        {
+            await bootstrapUserManager.AddToRoleAsync(bootstrapUser, "Admin");
+        }
+    }
 }
 
 app.MapGet("/api/discovery/states", (IOptions<DiscoveryBroadcastifyOptions> options) =>

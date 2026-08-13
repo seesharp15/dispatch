@@ -1,6 +1,19 @@
 # dispatch
 A transcription service for live dispatch audio feeds
 
+## Becoming an admin
+Feed start/stop/delete/archive controls are restricted to the `Admin`
+role. The `Admin` role itself is seeded automatically on startup, but no
+user is added to it automatically. To promote the first admin on a fresh
+deployment:
+
+1. Register a normal account through the app.
+2. Set `Bootstrap:AdminEmail` (in `appsettings.json`, or via the
+   `Bootstrap__AdminEmail` environment variable) to that account's email.
+3. Restart the app — on startup it promotes the matching account to
+   `Admin` if it isn't already. This is idempotent and safe to leave set
+   permanently, or to clear once the account is promoted.
+
 ## Change notes
 - Transcript processing now surfaces an estimated progress percentage (derived from audio file size) and shows queue position when waiting to be transcribed.
 - Added scaffolding for Broadcastify feed discovery (domain models, discovery service, DI registration, and state map configuration).
