@@ -4,6 +4,7 @@ using Dispatch.Web.Models;
 using Dispatch.Web.Options;
 using Dispatch.Web.Services;
 using Dispatch.Web.Workers;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -299,7 +300,20 @@ builder.Services.ConfigureApplicationCookie(options =>
     options.ExpireTimeSpan = TimeSpan.FromDays(14);
     options.Cookie.HttpOnly = true;
     options.Cookie.SameSite = SameSiteMode.Strict;
-    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    // Require HTTPS for the auth cookie outside local dev — this app carries an
+    // auth-bearing cookie, so plaintext HTTP in production would leak sessions.
+    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+        ? CookieSecurePolicy.SameAsRequest
+        : CookieSecurePolicy.Always;
+});
+
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // Defaults only trust a proxy on loopback (same host). If this is fronted by a
+    // proxy/load balancer on a different host, add its address to KnownProxies or
+    // its subnet to KnownNetworks here — otherwise forwarded headers are ignored
+    // and the app won't see the real client IP or HTTPS scheme.
 });
 
 builder.Services.AddAuthorization();
@@ -394,6 +408,16 @@ if (transcriptionOptionsCheck.Enabled &&
 var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
 var processRegistry = app.Services.GetRequiredService<ChildProcessRegistry>();
 lifetime.ApplicationStopping.Register(() => processRegistry.KillAll());
+
+// Must run before anything that reads scheme/remote IP (HTTPS redirection, auth
+// cookie logic, IP-keyed rate limiting) so those see the real client, not the proxy.
+app.UseForwardedHeaders();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+    app.UseHttpsRedirection();
+}
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
