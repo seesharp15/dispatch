@@ -128,6 +128,36 @@ async Task<(Dictionary<Guid, int> Map, int Total)> GetPendingQueueAsync(Dispatch
     return (map, pendingIds.Count);
 }
 
+void ValidateExecutablePath(string label, string path)
+{
+    if (string.IsNullOrWhiteSpace(path))
+    {
+        throw new InvalidOperationException($"{label} is not configured.");
+    }
+
+    if (Path.IsPathRooted(path))
+    {
+        if (!File.Exists(path))
+        {
+            throw new InvalidOperationException(
+                $"{label} '{path}' does not exist. Set the correct path in configuration for this environment.");
+        }
+        return;
+    }
+
+    var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+    var foundOnPath = pathEnv.Split(Path.PathSeparator)
+        .Where(dir => !string.IsNullOrWhiteSpace(dir))
+        .Select(dir => Path.Combine(dir, path))
+        .Any(File.Exists);
+
+    if (!foundOnPath)
+    {
+        throw new InvalidOperationException(
+            $"{label} '{path}' was not found on PATH. Install it, or set an absolute path in configuration for this environment.");
+    }
+}
+
 Guid? GetUserId(HttpContext context)
 {
     var value = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -348,6 +378,18 @@ builder.Services.AddHostedService<FeedStartupWorker>();
 builder.Services.AddHostedService<FeedSessionCleanupWorker>();
 
 var app = builder.Build();
+
+// Fail fast with a clear error if the required binaries aren't reachable, instead of
+// failing deep inside FeedRecorder/WhisperCliTranscriber the first time a feed starts.
+var decoderOptionsCheck = app.Services.GetRequiredService<IOptions<DecoderOptions>>().Value;
+ValidateExecutablePath("Decoder:FfmpegPath", decoderOptionsCheck.FfmpegPath);
+
+var transcriptionOptionsCheck = app.Services.GetRequiredService<IOptions<TranscriptionOptions>>().Value;
+if (transcriptionOptionsCheck.Enabled &&
+    transcriptionOptionsCheck.Provider.Equals("whisper-cli", StringComparison.OrdinalIgnoreCase))
+{
+    ValidateExecutablePath("Transcription:WhisperCliPath", transcriptionOptionsCheck.WhisperCliPath);
+}
 
 var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
 var processRegistry = app.Services.GetRequiredService<ChildProcessRegistry>();
