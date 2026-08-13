@@ -673,6 +673,26 @@ function hideContextMenu() {
   contextRecordingId = null;
 }
 
+let toastTimer = null;
+
+function showToast(message) {
+  let toast = document.getElementById("app-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "app-toast";
+    toast.className = "app-toast";
+    document.body.appendChild(toast);
+  }
+
+  toast.textContent = message;
+  toast.classList.add("visible");
+
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.classList.remove("visible");
+  }, 4000);
+}
+
 async function loadActiveFeeds() {
   const feeds = (await fetchJson("/api/feeds/active")) ?? [];
   renderActiveFeeds(feeds);
@@ -1443,18 +1463,40 @@ function connectRecordingStream() {
   eventSource.addEventListener("updated", handleEvent("updated"));
   eventSource.addEventListener("archived", handleEvent("archived"));
   eventSource.onerror = () => {
-    sseFailCount++;
-    if (sseFailCount >= SSE_MAX_FAILURES) {
-      // Likely session expired — redirect to login
+    disconnectRecordingStream();
+    handleSseFailure(connectRecordingStream);
+  };
+}
+
+async function handleSseFailure(reconnectFn) {
+  sseFailCount++;
+  if (sseFailCount < SSE_MAX_FAILURES) {
+    if (refreshEnabled) {
+      setTimeout(() => {
+        if (refreshEnabled) reconnectFn();
+      }, 1000);
+    }
+    return;
+  }
+
+  // Repeated failures alone don't mean the session expired — could just be a
+  // flaky connection. Check before bouncing the user to login.
+  try {
+    const response = await fetch("/api/auth/me", { credentials: "same-origin" });
+    if (response.status === 401) {
       window.location.href = "/login.html";
       return;
     }
-    if (!refreshEnabled) return;
-    disconnectRecordingStream();
+  } catch {
+    // Network unreachable entirely — fall through and keep retrying.
+  }
+
+  sseFailCount = 0;
+  if (refreshEnabled) {
     setTimeout(() => {
-      if (refreshEnabled) connectRecordingStream();
-    }, 1000);
-  };
+      if (refreshEnabled) reconnectFn();
+    }, 5000);
+  }
 }
 
 function disconnectRecordingStream() {
@@ -1531,16 +1573,8 @@ function connectFeedStream() {
     }
   });
   feedEventSource.onerror = () => {
-    sseFailCount++;
-    if (sseFailCount >= SSE_MAX_FAILURES) {
-      window.location.href = "/login.html";
-      return;
-    }
-    if (!refreshEnabled) return;
     disconnectFeedStream();
-    setTimeout(() => {
-      if (refreshEnabled) connectFeedStream();
-    }, 1000);
+    handleSseFailure(connectFeedStream);
   };
 }
 
@@ -2069,7 +2103,7 @@ async function addFeedFromDiscovery(payload) {
 
   const result = await fetchJson(`/api/feeds/${targetFeed.id}/activate`, { method: "POST" });
   if (result?.adminStopped) {
-    alert(result.message || "This feed has been disabled by an admin.");
+    showToast(result.message || "This feed has been disabled by an admin.");
     return;
   }
 
