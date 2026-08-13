@@ -79,7 +79,7 @@ public record LocalAudioDeviceDto(
     string Backend,
     string CaptureKind);
 
-public record RegisterRequest(string Email, string Password);
+public record RegisterRequest(string Email, string Password, string? InviteCode = null);
 
 public record LoginRequest(string Email, string Password);
 

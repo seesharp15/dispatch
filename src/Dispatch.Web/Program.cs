@@ -14,6 +14,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Diagnostics;
 using System.Security.Claims;
+using System.Threading.RateLimiting;
 using DiscoveryBroadcastifyOptions = FeedDiscovery.Broadcastify.BroadcastifyOptions;
 
 string ResolveRecordingPath(string path, IHostEnvironment env)
@@ -244,6 +245,9 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole<Guid>>(options =>
     options.Password.RequiredLength = 8;
     options.User.RequireUniqueEmail = true;
     options.SignIn.RequireConfirmedEmail = false;
+    options.Lockout.AllowedForNewUsers = true;
+    options.Lockout.MaxFailedAccessAttempts = 5;
+    options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
 })
 .AddEntityFrameworkStores<DispatchDbContext>();
 
@@ -269,6 +273,45 @@ builder.Services.ConfigureApplicationCookie(options =>
 });
 
 builder.Services.AddAuthorization();
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Login: guard against password-guessing from a single IP.
+    options.AddPolicy("login", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(15),
+                QueueLimit = 0
+            }));
+
+    // Registration: bound how many accounts one IP can create per hour —
+    // each account can immediately spin up real ffmpeg/whisper processes.
+    options.AddPolicy("register", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromHours(1),
+                QueueLimit = 0
+            }));
+
+    // Feed activation: bound how often one user can toggle feeds on/off.
+    options.AddPolicy("activate", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            GetUserId(httpContext)?.ToString() ?? httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+});
 
 builder.Services.AddHttpClient("stream")
     .ConfigureHttpClient(client =>
@@ -314,6 +357,7 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 using (var scope = app.Services.CreateScope())
 {
@@ -760,7 +804,7 @@ app.MapPost("/api/feeds/{id:guid}/activate", async (Guid id, DispatchDbContext d
         AsUtc(feed.CreatedUtc),
         feed.LastStartedUtc.HasValue ? AsUtc(feed.LastStartedUtc.Value) : null,
         feed.LastStoppedUtc.HasValue ? AsUtc(feed.LastStoppedUtc.Value) : null));
-}).RequireAuthorization();
+}).RequireAuthorization().RequireRateLimiting("activate");
 
 app.MapDelete("/api/feeds/{id:guid}/activate", async (Guid id, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
@@ -789,7 +833,7 @@ app.MapDelete("/api/feeds/{id:guid}/activate", async (Guid id, DispatchDbContext
     }
 
     return Results.Ok();
-}).RequireAuthorization();
+}).RequireAuthorization().RequireRateLimiting("activate");
 
 app.MapPost("/api/feeds/heartbeat", async (HeartbeatRequest request, DispatchDbContext db, FeedCoordinator coordinator, HttpContext context, CancellationToken ct) =>
 {
@@ -1499,11 +1543,18 @@ app.MapGet("/api/recordings/stream", async (Guid? feedId, DispatchDbContext db, 
 }).RequireAuthorization();
 
 // Auth endpoints
-app.MapPost("/api/auth/register", async (RegisterRequest request, UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager) =>
+app.MapPost("/api/auth/register", async (RegisterRequest request, UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager, IConfiguration configuration) =>
 {
     if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
     {
         return Results.BadRequest(new { message = "Email and password are required." });
+    }
+
+    var requiredInviteCode = configuration["Auth:InviteCode"];
+    if (!string.IsNullOrWhiteSpace(requiredInviteCode) &&
+        !string.Equals(request.InviteCode?.Trim(), requiredInviteCode, StringComparison.Ordinal))
+    {
+        return Results.BadRequest(new { message = "A valid invite code is required to register." });
     }
 
     var user = new ApplicationUser
@@ -1524,7 +1575,7 @@ app.MapPost("/api/auth/register", async (RegisterRequest request, UserManager<Ap
     await signInManager.SignInAsync(user, isPersistent: true);
     var isAdminOnRegister = await userManager.IsInRoleAsync(user, "Admin");
     return Results.Ok(new UserDto(user.Id, user.Email!, isAdminOnRegister));
-}).AllowAnonymous();
+}).AllowAnonymous().RequireRateLimiting("register");
 
 app.MapPost("/api/auth/login", async (LoginRequest request, SignInManager<ApplicationUser> signInManager, UserManager<ApplicationUser> userManager) =>
 {
@@ -1537,7 +1588,7 @@ app.MapPost("/api/auth/login", async (LoginRequest request, SignInManager<Applic
         request.Email.Trim().ToLowerInvariant(),
         request.Password,
         isPersistent: true,
-        lockoutOnFailure: false);
+        lockoutOnFailure: true);
 
     if (!result.Succeeded)
     {
@@ -1547,7 +1598,7 @@ app.MapPost("/api/auth/login", async (LoginRequest request, SignInManager<Applic
     var user = await userManager.FindByEmailAsync(request.Email.Trim());
     var isAdminOnLogin = await userManager.IsInRoleAsync(user!, "Admin");
     return Results.Ok(new UserDto(user!.Id, user.Email!, isAdminOnLogin));
-}).AllowAnonymous();
+}).AllowAnonymous().RequireRateLimiting("login");
 
 app.MapPost("/api/auth/logout", async (HttpContext context, SignInManager<ApplicationUser> signInManager, DispatchDbContext db, FeedCoordinator coordinator, CancellationToken ct) =>
 {
