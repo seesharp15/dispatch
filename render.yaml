@@ -1,0 +1,68 @@
+# Render Blueprint — https://render.com/schema/render.yaml.json
+#
+# One web service, one disk. Everything about this app is stateful and
+# single-writer: the SQLite database and the recorded WAV files live on the
+# disk, and the feed coordinator, ffmpeg child processes and SSE hubs all live
+# in the instance's memory. That combination pins it to exactly one instance —
+# a second one would fight over the same SQLite file and stream every feed
+# twice. Disks also rule out zero-downtime deploys, so a deploy briefly drops
+# live feeds and reconnects them on the new instance.
+services:
+  - type: web
+    name: dispatch
+    runtime: docker
+    region: oregon
+    # 2 GB minimum: whisper base.en holds roughly 1 GB resident while
+    # transcribing, on top of one ffmpeg process per active feed.
+    plan: standard
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    numInstances: 1
+    # Give in-flight recordings a chance to flush before the container dies.
+    maxShutdownDelaySeconds: 60
+
+    disk:
+      name: dispatch-data
+      mountPath: /var/data
+      # Recordings are 16 kHz mono WAV — about 115 MB per feed-hour of *speech*
+      # (silence is dropped by the segmenter, so busy feeds cost more).
+      # Grow this before it fills; a full disk stops recording.
+      sizeGB: 20
+
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+
+      # Render terminates TLS at its edge and forwards plain HTTP to the
+      # container, which is reachable no other way. Trusting that one hop is
+      # what makes X-Forwarded-Proto/-For usable, which in turn is what makes
+      # the secure-cookie policy and the IP-keyed rate limits correct.
+      - key: ForwardedHeaders__TrustProxy
+        value: "true"
+
+      - key: Storage__RootPath
+        value: /var/data
+      - key: Storage__DatabasePath
+        value: /var/data/dispatch.db
+      - key: Storage__RecordingsPath
+        value: /var/data/recordings
+      # Encrypts the auth cookie. On the disk, or every deploy signs everyone out.
+      - key: Storage__DataProtectionKeysPath
+        value: /var/data/keys
+
+      - key: Decoder__FfmpegPath
+        value: /usr/bin/ffmpeg
+      - key: Transcription__WhisperCliPath
+        value: /opt/whisper/bin/whisper
+      - key: Transcription__WhisperModel
+        value: base.en
+
+      # Set both in the Dashboard, not here — see docs/deploying-to-render.md.
+      # Bootstrap__AdminEmail promotes one account to Admin on startup.
+      # Auth__InviteCode, when non-empty, gates registration behind a shared code.
+      - key: Bootstrap__AdminEmail
+        sync: false
+      - key: Auth__InviteCode
+        sync: false

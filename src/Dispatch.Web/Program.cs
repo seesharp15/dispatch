@@ -4,6 +4,7 @@ using Dispatch.Web.Models;
 using Dispatch.Web.Options;
 using Dispatch.Web.Services;
 using Dispatch.Web.Workers;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -221,6 +222,15 @@ async Task DeactivateUserFeeds(Guid userId, DispatchDbContext db, FeedCoordinato
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Managed hosts (Render, Fly, Heroku, Cloud Run) tell the container which port to
+// listen on via PORT. Honour it unless an explicit binding was already given.
+var platformPort = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrWhiteSpace(platformPort) &&
+    string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_URLS")))
+{
+    builder.WebHost.UseUrls($"http://0.0.0.0:{platformPort}");
+}
+
 string ResolvePath(string basePath, string path)
 {
     if (string.IsNullOrWhiteSpace(path))
@@ -238,6 +248,7 @@ builder.Services.PostConfigure<StorageOptions>(options =>
     options.RootPath = ResolvePath(root, options.RootPath);
     options.RecordingsPath = ResolvePath(root, options.RecordingsPath);
     options.DatabasePath = ResolvePath(root, options.DatabasePath);
+    options.DataProtectionKeysPath = ResolvePath(root, options.DataProtectionKeysPath);
 });
 builder.Services.Configure<SegmentationOptions>(builder.Configuration.GetSection("Segmentation"));
 builder.Services.Configure<StreamOptions>(builder.Configuration.GetSection("Stream"));
@@ -255,9 +266,11 @@ var storageOptions = builder.Configuration.GetSection("Storage").Get<StorageOpti
 storageOptions.RootPath = ResolvePath(builder.Environment.ContentRootPath, storageOptions.RootPath);
 storageOptions.RecordingsPath = ResolvePath(builder.Environment.ContentRootPath, storageOptions.RecordingsPath);
 storageOptions.DatabasePath = ResolvePath(builder.Environment.ContentRootPath, storageOptions.DatabasePath);
+storageOptions.DataProtectionKeysPath = ResolvePath(builder.Environment.ContentRootPath, storageOptions.DataProtectionKeysPath);
 
 Directory.CreateDirectory(storageOptions.RootPath);
 Directory.CreateDirectory(storageOptions.RecordingsPath);
+Directory.CreateDirectory(storageOptions.DataProtectionKeysPath);
 var dbDirectory = Path.GetDirectoryName(storageOptions.DatabasePath);
 if (!string.IsNullOrWhiteSpace(dbDirectory))
 {
@@ -266,6 +279,14 @@ if (!string.IsNullOrWhiteSpace(dbDirectory))
 
 builder.Services.AddDbContext<DispatchDbContext>(options =>
     options.UseSqlite($"Data Source={storageOptions.DatabasePath}"));
+
+// The Data Protection key ring encrypts the auth cookie. Its default home is a
+// directory inside the container image, which is thrown away on every deploy —
+// so without this, shipping a change signs out every user. Keep it on the same
+// durable storage as the database.
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(storageOptions.DataProtectionKeysPath))
+    .SetApplicationName("Dispatch");
 
 builder.Services.AddIdentity<ApplicationUser, IdentityRole<Guid>>(options =>
 {
@@ -307,14 +328,37 @@ builder.Services.ConfigureApplicationCookie(options =>
         : CookieSecurePolicy.Always;
 });
 
+// True when a TLS-terminating edge proxy is the only way to reach this container
+// (Render, Fly, Heroku and similar). Governs both how far forwarded headers are
+// trusted and which port HTTPS redirection targets.
+var behindTrustedProxy = builder.Configuration.GetValue("ForwardedHeaders:TrustProxy", false);
+
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    // Defaults only trust a proxy on loopback (same host). If this is fronted by a
-    // proxy/load balancer on a different host, add its address to KnownProxies or
-    // its subnet to KnownNetworks here — otherwise forwarded headers are ignored
-    // and the app won't see the real client IP or HTTPS scheme.
+
+    // Defaults only trust a proxy on loopback. Managed platforms terminate TLS at an
+    // edge proxy whose address isn't knowable ahead of time, so there we clear the
+    // allow-lists and trust the hop. That is only safe when the container is
+    // unreachable except through that proxy — which is true on Render, Fly, Heroku
+    // and similar, and is why this stays opt-in rather than being the default.
+    if (behindTrustedProxy)
+    {
+        options.ForwardLimit = 1;
+        options.KnownNetworks.Clear();
+        options.KnownProxies.Clear();
+    }
 });
+
+// UseHttpsRedirection needs to know which port to redirect to. Kestrel only
+// listens on plain HTTP behind a TLS-terminating proxy, so it can't infer one —
+// without this it logs "Failed to determine the https port for redirect" on
+// every boot and then silently passes plaintext requests through. Behind such a
+// proxy the public port is 443.
+if (behindTrustedProxy)
+{
+    builder.Services.AddHttpsRedirection(options => options.HttpsPort = 443);
+}
 
 builder.Services.AddAuthorization();
 
@@ -408,6 +452,18 @@ if (transcriptionOptionsCheck.Enabled &&
 var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
 var processRegistry = app.Services.GetRequiredService<ChildProcessRegistry>();
 lifetime.ApplicationStopping.Register(() => processRegistry.KillAll());
+
+// Platform health check. Deliberately cheap and dependency-free, so a stalled feed
+// or a busy transcription queue never gets the instance killed mid-recording.
+//
+// It sits ahead of UseHttpsRedirection on purpose: probes arrive over plain HTTP on
+// the private network without X-Forwarded-Proto, and a 307 back at the platform
+// reads as an unhealthy instance — which would block the deploy from going live.
+app.Map("/healthz", branch => branch.Run(async context =>
+{
+    context.Response.ContentType = "application/json";
+    await context.Response.WriteAsync("{\"status\":\"ok\"}");
+}));
 
 // Must run before anything that reads scheme/remote IP (HTTPS redirection, auth
 // cookie logic, IP-keyed rate limiting) so those see the real client, not the proxy.
@@ -1628,6 +1684,14 @@ app.MapGet("/api/recordings/stream", async (Guid? feedId, DispatchDbContext db, 
 }).RequireAuthorization();
 
 // Auth endpoints
+// Lets the sign-in page know whether to show an invite-code field, without
+// leaking the code itself.
+app.MapGet("/api/auth/config", (IConfiguration configuration) =>
+    Results.Ok(new
+    {
+        inviteRequired = !string.IsNullOrWhiteSpace(configuration["Auth:InviteCode"])
+    })).AllowAnonymous();
+
 app.MapPost("/api/auth/register", async (RegisterRequest request, UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager, IConfiguration configuration) =>
 {
     if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))

@@ -7,7 +7,10 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/Dotnet.gitignore
 
-#Project Items 
+#Project Items
+# Runtime storage (Storage:RootPath). Both cases are listed because git's
+# matching is case-sensitive even when macOS's filesystem isn't.
+src/Dispatch.Web/data/
 src/Dispatch.Web/Data/recordings/
 src/Dispatch.Web/Data/dispatch.db*
 

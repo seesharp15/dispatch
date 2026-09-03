@@ -1,62 +1,101 @@
-# dispatch
-A transcription service for live dispatch audio feeds
+# Dispatch
 
-## Becoming an admin
-Feed start/stop/delete/archive controls are restricted to the `Admin`
-role. The `Admin` role itself is seeded automatically on startup, but no
-user is added to it automatically. To promote the first admin on a fresh
-deployment:
+Live scanner and dispatch audio, segmented into individual calls and
+transcribed as they come in.
+
+Point it at a Broadcastify feed (or a local audio device) and it opens the
+stream, watches the audio level to split continuous radio traffic into
+discrete calls, stores each call as a WAV file, and runs Whisper over it. The
+console shows calls arriving in real time, grouped by day, with transcripts
+attached.
+
+---
+
+## How it works
+
+```
+Broadcastify / local device
+        │
+        ▼
+    ffmpeg ──► AudioSegmenter ──► one WAV per call ──► TranscriptionWorker ──► Whisper
+                (level-based,        (on disk)            (serial queue)          │
+                 with pre-roll)                                                   ▼
+                                                                              SQLite
+                                                                                  │
+                                                       server-sent events ◄───────┘
+                                                                │
+                                                                ▼
+                                                          web console
+```
+
+- **`FeedCoordinator` / `FeedRecorder`** — one ffmpeg process per active feed,
+  decoding to 16 kHz mono PCM.
+- **`AudioSegmenter`** — tracks a rolling noise floor and cuts a new recording
+  when the level rises above it, keeping a short pre-roll so the first syllable
+  isn't clipped.
+- **`TranscriptionWorker`** — drains the pending queue one call at a time
+  through the `ITranscriber` (Whisper CLI, or a no-op when disabled).
+- **`FeedEventHub` / `RecordingEventHub`** — push status and new calls to the
+  browser over SSE; the console does not poll.
+
+## Running locally
+
+Requires the .NET 10 SDK, plus `ffmpeg` and the `whisper` CLI on the machine:
+
+```bash
+brew install ffmpeg openai-whisper          # macOS
+dotnet run --project src/Dispatch.Web
+```
+
+`appsettings.Development.json` points at the Homebrew paths. The app fails
+fast at startup with a clear message if either binary is missing rather than
+failing later on the first feed. Data lands in `src/Dispatch.Web/data/`
+(git-ignored).
+
+## Deploying
+
+Containerised, with a Render Blueprint in `render.yaml`:
+
+**→ [docs/deploying-to-render.md](docs/deploying-to-render.md)**
+
+Read the sizing and single-instance notes there before going live — the
+instance plan and instance count are both load-bearing.
+
+## Admin accounts
+
+Feed start/stop/delete/archive are restricted to the `Admin` role. The role is
+seeded on startup; no user is added to it automatically. To promote the first
+admin:
 
 1. Register a normal account through the app.
-2. Set `Bootstrap:AdminEmail` (in `appsettings.json`, or via the
+2. Set `Bootstrap:AdminEmail` (in `appsettings.json`, or as the
    `Bootstrap__AdminEmail` environment variable) to that account's email.
-3. Restart the app — on startup it promotes the matching account to
-   `Admin` if it isn't already. This is idempotent and safe to leave set
-   permanently, or to clear once the account is promoted.
+3. Restart. Startup promotes the matching account to `Admin`.
 
-## Change notes
-- Transcript processing now surfaces an estimated progress percentage (derived from audio file size) and shows queue position when waiting to be transcribed.
-- Added scaffolding for Broadcastify feed discovery (domain models, discovery service, DI registration, and state map configuration).
-- Local SQLite database artifacts are now ignored to keep repo clean.
-- Redesigned the web UI to mirror the WEBB-style three-pane layout with feed discovery tree, drag-and-drop activation, and recordings grouped by day in the right pane.
-- Feed activity pane now allows full scroll through overflowed recordings.
-- Stopped feeds now remain visible in the active list so they can be restarted.
-- Right-hand recordings pane now flexes and scrolls correctly within the viewport layout.
-- Active feeds now render as compact single-line rows with truncation to prevent button overflow.
-- Settings page now allows toggling auto-refresh and adjusting the refresh interval.
-- Settings navigation now properly swaps the dashboard and settings view (no stacking).
-- Scrollable list containers now cap at viewport height with overflow scrolling.
-- Collapsed recording day groups now shrink to header height instead of filling available space.
-- Recording entries are more compact and transcripts can be expanded or collapsed per item.
-- Recording rows are now single-line with inline audio, right-aligned transcript toggle, and no 100% indicator for completed items.
-- Right-clicking a recording now provides a reprocess transcript action, with the transcript button aligned to the right in the row.
-- Double-clicking a recording toggles the transcript open/closed, matching the transcript button behavior.
-- State treeview now pins “Statewide” to the top before alphabetized counties.
-- Start/stop controls now optimistically update the UI for immediate feedback while the request completes.
-- Active feeds now include a remove (X) control to drop a stream from the list.
-- UI corner radii have been tightened to a subtle, near-square look across controls and panels.
-- Newly added recordings now flash green briefly to highlight recent arrivals.
-- API timestamps are now marked as UTC so the UI renders them in local time.
-- Recording lists now support archiving per recording or per day, with a show-archived toggle in the feed activity pane.
-- Recording day expansion state and scroll position are now preserved during live updates so new items append without collapsing your view.
-- New-recording flash highlights only trigger for truly new arrivals within a short time window, avoiding full-list flashes on load.
-- Completed recordings no longer display a status badge, keeping focus on in-progress/queued states.
-- Broadcastify discovery results are now cached per state for 30 days and only fetched on state expansion.
-- Status badges now color-code Live/Processing as green, Pending as orange, and Paused/Failed in red.
-- Queue indicators now show position and total size as `Queue: (position/total)`.
-- Recording status/queue indicators now sit after the audio player, and transcript toggles only appear once a transcript is complete.
-- Feed discovery now preloads all state feeds into the left tree (cached server-side), so search works across the full list without manually expanding states.
-- Start buttons now render in neutral gray while Stop remains red for clearer at-a-glance status.
-- Recording list scroll position now anchors to the visible item during refreshes so updates don’t jump your view.
-- Recording-day scroll state now persists across refreshes without clearing the container, preventing jumps mid-list.
-- Recording rows no longer show a separate duration stamp; the audio control already conveys length.
-- Per-day recording lists now maintain their own scroll anchors during refreshes (since those lists handle scrolling, not the parent pane).
-- Recording updates now append new items and update statuses in place (no full list rebuilds on every refresh).
-- Client polling has been replaced with live server-sent events; new recordings append and status changes stream in without periodic refresh calls.
-- Broadcastify feed discovery now deduplicates Statewide feeds so each feed appears only once.
-- Removed the redundant “View activity” action since selecting a feed already shows its activity.
-- Feed cards now flash green briefly when a new recording arrives, even if the feed isn’t selected.
-- Feed status now updates live via server-sent events when recording starts or stops.
-- Feed status streaming now sends an initial snapshot so the UI reflects current running feeds without a manual refresh.
-- Recording stream matching now normalizes feed IDs and reconnects on errors to keep new items flowing without manual refresh.
-- Recording streams now send a snapshot of in-flight items and refresh queue/processing states on each event.
+Idempotent — safe to leave set, or to clear once the account is promoted.
+
+## Registration
+
+Open by default. Setting `Auth:InviteCode` to a non-empty value requires that
+code to register; the sign-in page shows the field only when the server says
+it's needed. Registration and login are rate-limited per IP, and Identity
+lockout is on (5 failed attempts, 15 minutes).
+
+Since any account can activate a feed — which spawns real ffmpeg and Whisper
+work — gate registration with an invite code unless you actually want open
+signup.
+
+## Configuration
+
+| Section | Key settings |
+|---|---|
+| `Storage` | `RootPath`, `DatabasePath`, `RecordingsPath` |
+| `Decoder` | `FfmpegPath`, `SampleRate`, `Channels`, reconnect behaviour |
+| `Segmentation` | `ActivationDeltaDb`, `SilenceDeltaDb`, `HangoverSeconds`, `PreRollSeconds` |
+| `Transcription` | `Enabled`, `Provider`, `WhisperCliPath`, `WhisperModel`, `Language` |
+| `Broadcastify` | Base URLs, stream URL template, state→id map |
+| `Auth` / `Bootstrap` | `InviteCode`, `AdminEmail` |
+| `ForwardedHeaders` | `TrustProxy` — see the deploy doc before enabling |
+
+Any key can be set as an environment variable using `__` for nesting
+(`Storage__RecordingsPath`).
