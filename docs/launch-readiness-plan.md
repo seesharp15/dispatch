@@ -10,8 +10,12 @@ launch, **P2** = monitor, not urgent yet.
 **Status (2026-08-13): all items done.** See commit references in each
 section. P1-2's TLS/proxy behavior was implemented with safe defaults
 (loopback-only trusted proxy) rather than a specific deploy target, since
-that wasn't known at the time — see its note below before deploying behind
-a non-loopback proxy/load balancer.
+that wasn't known at the time.
+
+**Update (2026-09-03): deploy target resolved — Render.** P1-2's open
+question is closed; see the "Resolution" note in that section. Deployment
+artifacts now live in the repo (`Dockerfile`, `render.yaml`,
+`docs/deploying-to-render.md`).
 
 ---
 
@@ -116,7 +120,18 @@ deploy manifest/Dockerfile is used.
 
 ## P1-2. Confirm TLS termination in front of the app — done (`f7334bb`)
 
-**Note on what was actually implemented:** the real deploy target wasn't
+**Resolution (2026-09-03):** the deploy target is **Render**, which
+terminates TLS at its edge and forwards plain HTTP to the container over its
+private network — a non-loopback proxy, exactly the case the note below
+warned about. Handled by a `ForwardedHeaders:TrustProxy` config flag
+(`Program.cs`): when set it clears `KnownNetworks`/`KnownProxies` and pins
+`ForwardLimit = 1`, trusting that single hop. It defaults to **false** and is
+turned on only in `render.yaml` / the `Dockerfile`, because it is only safe
+where the container cannot be reached except through the proxy. Also added:
+`PORT` binding for the platform, and a `/healthz` endpoint for
+`healthCheckPath`. Full rationale in `docs/deploying-to-render.md`.
+
+**Note on what was originally implemented:** the real deploy target wasn't
 known at implementation time, so this shipped with the safe default:
 `ForwardedHeadersOptions` trusts only a loopback proxy (ASP.NET Core's
 built-in default), `UseHsts`/`UseHttpsRedirection` are enabled outside

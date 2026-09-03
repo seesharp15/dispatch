@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+**/data/
+**/Data/recordings/
+**/Data/dispatch.db*
+**/.vs/
+**/.vscode/
+**/.idea/
+.git/
+.github/
+.claude/
+docs/
+**/.DS_Store
+**/node_modules/
+**/*.user
