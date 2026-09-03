@@ -3,12 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Dispatch Studio — Sign In</title>
+    <title>Dispatch — Sign In</title>
+    <meta name="theme-color" content="#0b0c0d" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
   </head>
@@ -16,12 +19,16 @@
     <div class="app-shell auth-shell">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-title">DISPATCHIFY</span>
+          <span class="brand-title">Dispatch</span>
         </div>
       </header>
 
       <div class="auth-container">
         <div class="auth-card">
+          <p class="auth-lede">
+            Live scanner and dispatch audio, segmented into calls and transcribed as they come in.
+          </p>
+
           <div class="auth-tabs">
             <button class="auth-tab active" data-tab="login" type="button">Sign In</button>
             <button class="auth-tab" data-tab="register" type="button">Register</button>
@@ -47,7 +54,11 @@
             </label>
             <label class="modal-field">
               <span>Password</span>
-              <input id="register-password" type="password" autocomplete="new-password" required />
+              <input id="register-password" type="password" autocomplete="new-password" minlength="8" required />
+            </label>
+            <label class="modal-field" id="invite-field" hidden>
+              <span>Invite Code</span>
+              <input id="register-invite" type="text" autocomplete="off" />
             </label>
             <p id="register-error" class="auth-error" hidden></p>
             <button class="primary" type="submit">Create Account</button>
@@ -67,6 +78,18 @@
         });
       });
 
+      // Only ask for an invite code when the server is actually gating registration.
+      fetch("/api/auth/config")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((config) => {
+          const field = document.getElementById("invite-field");
+          if (config?.inviteRequired) {
+            field.hidden = false;
+            document.getElementById("register-invite").required = true;
+          }
+        })
+        .catch(() => {});
+
       async function authPost(url, body) {
         const res = await fetch(url, {
           method: "POST",
@@ -81,18 +104,22 @@
         return { ok: res.ok, status: res.status, data };
       }
 
+      function showError(el, status, fallback) {
+        el.textContent = status === 429 ? "Too many attempts. Wait a few minutes and try again." : fallback;
+        el.hidden = false;
+      }
+
       document.getElementById("login-form").addEventListener("submit", async (e) => {
         e.preventDefault();
         const errorEl = document.getElementById("login-error");
         errorEl.hidden = true;
         const email = document.getElementById("login-email").value;
         const password = document.getElementById("login-password").value;
-        const { ok, data } = await authPost("/api/auth/login", { email, password });
+        const { ok, status, data } = await authPost("/api/auth/login", { email, password });
         if (ok) {
           window.location.href = "/";
         } else {
-          errorEl.textContent = data?.message || "Invalid email or password.";
-          errorEl.hidden = false;
+          showError(errorEl, status, data?.message || "Invalid email or password.");
         }
       });
 
@@ -102,12 +129,12 @@
         errorEl.hidden = true;
         const email = document.getElementById("register-email").value;
         const password = document.getElementById("register-password").value;
-        const { ok, data } = await authPost("/api/auth/register", { email, password });
+        const inviteCode = document.getElementById("register-invite").value;
+        const { ok, status, data } = await authPost("/api/auth/register", { email, password, inviteCode });
         if (ok) {
           window.location.href = "/";
         } else {
-          errorEl.textContent = data?.message || "Registration failed.";
-          errorEl.hidden = false;
+          showError(errorEl, status, data?.message || "Registration failed.");
         }
       });
     </script>

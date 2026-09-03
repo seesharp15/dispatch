@@ -3,12 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Dispatch Studio</title>
+    <title>Dispatch — Live Feed Console</title>
+    <meta name="description" content="Live scanner and dispatch audio: monitored, segmented into calls, and transcribed as they happen." />
+    <meta name="theme-color" content="#0b0c0d" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
   </head>
@@ -16,14 +20,30 @@
     <div class="app-shell">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-title">DISPATCHIFY</span>
+          <span class="brand-title">Dispatch</span>
           <nav class="nav-links">
-            <button class="nav-link active" type="button" data-page="dashboard">Dashboard</button>
+            <button class="nav-link active" type="button" data-page="dashboard">Console</button>
             <button class="nav-link" type="button" data-page="settings">Settings</button>
           </nav>
         </div>
+
+        <div class="status-rail">
+          <div class="rail-stat">
+            <span class="rail-label">On Air</span>
+            <span class="rail-value is-zero" id="rail-live">0</span>
+          </div>
+          <div class="rail-stat">
+            <span class="rail-label">Channels</span>
+            <span class="rail-value is-zero" id="rail-feeds">0</span>
+          </div>
+          <div class="rail-stat">
+            <span class="rail-label">Local</span>
+            <span class="rail-value" id="rail-clock">--:--:--</span>
+          </div>
+        </div>
+
         <div class="user-meta">
-          <span class="admin-badge" id="admin-badge" hidden>ADMIN</span>
+          <span class="admin-badge" id="admin-badge" hidden>Admin</span>
           <span class="user-email" id="user-email"></span>
           <button class="ghost" type="button" id="sign-out-btn">Sign Out</button>
         </div>
@@ -32,18 +52,18 @@
       <section class="workspace" id="dashboard">
         <aside class="panel sidebar">
           <div class="panel-header">
-            <div>
-              <p class="eyebrow">Feed Discovery</p>
-              <h2>Audio Feeds</h2>
+            <div class="title-line">
+              <span class="panel-index">01</span>
+              <h2>Directory</h2>
             </div>
             <div class="sidebar-actions">
-              <button id="add-local-feed" class="ghost icon-button" type="button" title="Add local audio source">+</button>
+              <button id="add-local-feed" class="ghost icon-button" type="button" title="Add local audio source" aria-label="Add local audio source">+</button>
               <button id="refresh-states" class="ghost" type="button">Refresh</button>
             </div>
           </div>
 
           <div class="search-box">
-            <input id="feed-search" type="search" placeholder="Search feeds..." />
+            <input id="feed-search" type="search" placeholder="Filter feeds…" aria-label="Filter feeds" />
           </div>
 
           <div class="tree" id="feed-tree"></div>
@@ -51,18 +71,17 @@
 
         <main class="panel canvas" id="active-canvas">
           <div class="panel-header">
-            <div>
-              <p class="eyebrow">Active Canvas</p>
-              <h2>Streaming Feeds</h2>
-              <p class="muted">Drag a feed from the left to start streaming & transcription.</p>
+            <div class="title-line">
+              <span class="panel-index">02</span>
+              <h2>Channels</h2>
             </div>
-            <div class="status-pill" id="active-status">Idle</div>
+            <div class="status-pill" id="active-status">No feeds added</div>
           </div>
 
           <div class="drop-zone" id="drop-zone">
             <div class="drop-hint">
-              <p>Drop feeds here to activate</p>
-              <span>Streaming begins immediately</span>
+              <p>Drop a feed here to open a channel</p>
+              <span>Recording and transcription start immediately</span>
             </div>
           </div>
 
@@ -71,15 +90,15 @@
 
         <aside class="panel insights">
           <div class="panel-header">
-            <div>
-              <p class="eyebrow">Feed Activity</p>
-              <h2 id="recordings-title">Select a feed</h2>
-              <p class="muted" id="recordings-subtitle">Choose an active feed to view recordings.</p>
+            <div class="title-line">
+              <span class="panel-index">03</span>
+              <h2 id="recordings-title">No channel selected</h2>
+              <p class="muted" id="recordings-subtitle">Pick a channel to review its calls.</p>
             </div>
             <div class="recordings-actions">
               <label class="checkbox-row">
                 <input id="show-archived-toggle" type="checkbox" />
-                <span>Show archived</span>
+                <span>Archived</span>
               </label>
             </div>
           </div>
@@ -91,17 +110,16 @@
       <section class="settings-page" id="settings" hidden>
         <div class="panel settings-panel">
           <div class="panel-header">
-            <div>
-              <p class="eyebrow">Preferences</p>
+            <div class="title-line">
+              <span class="panel-index">04</span>
               <h2>Settings</h2>
-              <p class="muted">Control refresh behavior and dashboard updates.</p>
             </div>
           </div>
 
           <div class="settings-grid">
-          <div class="settings-card">
+            <div class="settings-card">
               <h3>Live Updates</h3>
-              <p class="muted">Toggle live streaming updates for feeds and recordings.</p>
+              <p class="muted">Stream feed and call changes to this console as they happen. Turn off to stop the event stream.</p>
               <label class="toggle-row">
                 <span>Enable live updates</span>
                 <input id="auto-refresh-toggle" type="checkbox" checked />
@@ -110,9 +128,9 @@
 
             <div class="settings-card">
               <h3>Progress Interval</h3>
-              <p class="muted">Set how often processing progress ticks and fallback sync run locally.</p>
+              <p class="muted">How often transcription progress ticks locally, and how often the fallback sync runs.</p>
               <label class="interval-row">
-                <span>Interval (milliseconds)</span>
+                <span>Interval (ms)</span>
                 <input id="refresh-interval" type="number" min="0" step="1" />
               </label>
               <p class="muted small" id="refresh-interval-value"></p>
@@ -124,8 +142,8 @@
 
     <div id="local-feed-modal" class="modal-overlay" hidden>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="local-feed-title">
-        <h3 id="local-feed-title">Add Local Audio Source</h3>
-        <p class="muted">Select a microphone or loopback/output device from this machine.</p>
+        <h3 id="local-feed-title">Add Local Source</h3>
+        <p class="muted">Capture from a microphone or loopback device on the machine running this server.</p>
         <label class="modal-field">
           <span>Device</span>
           <select id="local-device-select"></select>
@@ -193,7 +211,7 @@
         <div class="active-actions">
           <button class="ghost listen-toggle" type="button" title="Unmute monitor" aria-label="Unmute monitor">&#128263;</button>
           <button class="primary toggle" type="button">Stop</button>
-          <button class="ghost remove" title="Remove feed" type="button">X</button>
+          <button class="ghost remove" title="Remove feed" aria-label="Remove feed" type="button">&#10005;</button>
         </div>
       </article>
     </template>
@@ -205,7 +223,7 @@
             <span class="recording-time"></span>
           </div>
           <div class="recording-audio-row">
-            <audio controls class="recording-audio"></audio>
+            <audio controls preload="none" class="recording-audio"></audio>
           </div>
           <div class="recording-status recording-status-inline">
             <span class="badge"></span>

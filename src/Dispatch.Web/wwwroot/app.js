@@ -4,6 +4,9 @@ const addLocalFeedButton = document.getElementById("add-local-feed");
 const searchInput = document.getElementById("feed-search");
 const activeFeedsContainer = document.getElementById("active-feeds");
 const activeStatus = document.getElementById("active-status");
+const railLive = document.getElementById("rail-live");
+const railFeeds = document.getElementById("rail-feeds");
+const railClock = document.getElementById("rail-clock");
 const recordingsContainer = document.getElementById("recordings");
 const recordingsTitle = document.getElementById("recordings-title");
 const recordingsSubtitle = document.getElementById("recordings-subtitle");
@@ -806,7 +809,7 @@ function renderActiveFeeds(feeds) {
       entry.card.remove();
     });
     activeFeedNodes.clear();
-    activeFeedsContainer.innerHTML = "<p class=\"muted\">No active feeds yet.</p>";
+    activeFeedsContainer.innerHTML = "<p class=\"muted\">No channels open.</p>";
     return;
   }
 
@@ -848,8 +851,18 @@ function renderActiveFeeds(feeds) {
 function updateActiveStatus(feeds) {
   const runningCount = feeds.filter((feed) => feed.isRunning).length;
   activeStatus.textContent = feeds.length
-    ? `${runningCount} live • ${feeds.length} total`
+    ? `${runningCount} on air / ${feeds.length} open`
     : "No feeds added";
+
+  if (railLive) {
+    railLive.textContent = String(runningCount);
+    railLive.classList.toggle("is-live", runningCount > 0);
+    railLive.classList.toggle("is-zero", runningCount === 0);
+  }
+  if (railFeeds) {
+    railFeeds.textContent = String(feeds.length);
+    railFeeds.classList.toggle("is-zero", feeds.length === 0);
+  }
 }
 
 function updateActiveStatusFromNodes() {
@@ -1002,7 +1015,7 @@ function createActiveFeedCard(feed) {
       updateActiveStatusFromNodes();
 
       if (activeFeedNodes.size === 0) {
-        activeFeedsContainer.innerHTML = "<p class=\"muted\">No active feeds yet.</p>";
+        activeFeedsContainer.innerHTML = "<p class=\"muted\">No channels open.</p>";
       }
 
       if (toFeedKey(selectedFeedId) === toFeedKey(currentFeed.id)) {
@@ -1077,13 +1090,13 @@ function selectFeed(feedId) {
 
 function updateRecordingHeader(feed) {
   if (!feed) {
-    recordingsTitle.textContent = "Select a feed";
-    recordingsSubtitle.textContent = "Choose an active feed to view recordings.";
+    recordingsTitle.textContent = "No channel selected";
+    recordingsSubtitle.textContent = "Pick a channel to review its calls.";
     return;
   }
 
   recordingsTitle.textContent = feed.name;
-  recordingsSubtitle.textContent = `${feed.feedIdentifier} • ${feed.broadcastifyUrl}`;
+  recordingsSubtitle.textContent = `Feed ${feed.feedIdentifier}`;
 }
 
 function resetRecordingView() {
@@ -1132,7 +1145,7 @@ function updateDayCount(dayKey, dayEntry) {
     ? recordingDayTotals.get(dayKey)
     : dayEntry.list.children.length;
   const normalized = Number.isFinite(totalCalls) ? Math.max(0, Number(totalCalls)) : dayEntry.list.children.length;
-  dayEntry.count.textContent = `${normalized} calls`;
+  dayEntry.count.textContent = `${normalized} ${normalized === 1 ? "call" : "calls"}`;
 }
 
 function updateOldestRecordingStart(recordings) {
@@ -1177,7 +1190,7 @@ async function loadInitialRecordingsPage() {
 
     const daySummaries = Array.isArray(daySummariesResponse) ? daySummariesResponse : [];
     if (daySummaries.length === 0) {
-      recordingsContainer.innerHTML = "<p class=\"muted\">No recordings yet.</p>";
+      recordingsContainer.innerHTML = "<p class=\"muted\">No calls recorded yet.</p>";
       recordingsInitialized = true;
       latestRecordingStart = new Date().toISOString();
       oldestRecordingStart = null;
@@ -2110,6 +2123,15 @@ async function addFeedFromDiscovery(payload) {
   await loadActiveFeeds();
 }
 
+function startRailClock() {
+  if (!railClock) return;
+  const tick = () => {
+    railClock.textContent = new Date().toLocaleTimeString([], { hour12: false });
+  };
+  tick();
+  setInterval(tick, 1000);
+}
+
 function setupDragAndDrop() {
   dropZone.addEventListener("dragover", (event) => {
     event.preventDefault();
@@ -2228,6 +2250,7 @@ document.getElementById("sign-out-btn")?.addEventListener("click", async () => {
     return;
   }
 
+  startRailClock();
   setupContextMenu();
   setupDragAndDrop();
   loadUiConfig();
